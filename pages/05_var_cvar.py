@@ -40,9 +40,9 @@ st.subheader("Portafolio equiponderado")
 st.write("Pesos:", dict(zip(returns.columns, np.round(weights, 4))))
 
 st.subheader("Comparación VaR / CVaR")
-st.dataframe(table, use_container_width=True)
+st.dataframe(table, width="stretch")
 
-st.plotly_chart(plot_var_distribution(portfolio_returns, table), use_container_width=True)
+st.plotly_chart(plot_var_distribution(portfolio_returns, table), width="stretch")
 
 st.info(
     "El VaR estima una pérdida umbral; el CVaR mide la pérdida promedio en la cola más extrema."

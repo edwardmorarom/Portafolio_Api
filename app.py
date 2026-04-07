@@ -61,7 +61,7 @@ col3.metric("Benchmark global", GLOBAL_BENCHMARK)
 
 st.subheader("Precios normalizados (base 100)")
 fig_norm = plot_normalized_prices(close_prices)
-st.plotly_chart(fig_norm, use_container_width=True)
+st.plotly_chart(fig_norm, width="stretch")
 
 st.subheader("Resumen rápido del portafolio equiponderado")
 summary = pd.DataFrame(
@@ -80,10 +80,10 @@ summary = pd.DataFrame(
         ],
     }
 )
-st.dataframe(summary, use_container_width=True)
+st.dataframe(summary, width="stretch")
 
 st.subheader("Últimos precios disponibles")
-st.dataframe(close_prices.tail(10), use_container_width=True)
+st.dataframe(close_prices.tail(10), width="stretch")
 
 st.markdown(
     """

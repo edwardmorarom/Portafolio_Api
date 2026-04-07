@@ -1,4 +1,5 @@
 import streamlit as st
+import pandas as pd
 
 from src.config import (
     ASSETS,
@@ -11,7 +12,7 @@ from src.config import (
 from src.download import download_single_ticker
 from src.returns_analysis import compute_return_series
 from src.capm import compute_beta_and_capm
-from src.macro import macro_snapshot
+from src.api.macro import macro_snapshot
 from src.plots import plot_scatter_regression
 
 ensure_project_dirs()
@@ -46,15 +47,30 @@ if not res:
 
 st.subheader(f"{asset_name} ({ticker}) vs benchmark local ({benchmark_ticker})")
 
-summary = {
-    "beta": res["beta"],
-    "alpha_diaria": res["alpha_diaria"],
-    "r_squared": res["r_squared"],
-    "p_value_beta": res["p_value_beta"],
-    "expected_return_capm_annual": res["expected_return_capm_annual"],
-    "classification": res["classification"],
-}
-st.dataframe(summary, use_container_width=True)
+summary_df = pd.DataFrame(
+    {
+        "metric": [
+            "beta",
+            "alpha_diaria",
+            "r_squared",
+            "p_value_beta",
+            "expected_return_capm_annual",
+            "classification",
+        ],
+        "value": [
+            res["beta"],
+            res["alpha_diaria"],
+            res["r_squared"],
+            res["p_value_beta"],
+            res["expected_return_capm_annual"],
+            res["classification"],
+        ],
+    }
+)
+
+summary_df["value"] = summary_df["value"].astype(str)
+
+st.dataframe(summary_df, width="stretch")
 
 fig = plot_scatter_regression(
     x=res["scatter_data"]["market_excess"],
@@ -62,7 +78,7 @@ fig = plot_scatter_regression(
     yhat=res["regression_line"]["y"],
     title="Regresión CAPM",
 )
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 st.info(
     "Beta > 1 sugiere mayor sensibilidad al mercado; Beta < 1 sugiere comportamiento más defensivo."

@@ -29,7 +29,9 @@ def descriptive_stats(returns: pd.Series) -> pd.DataFrame:
         "asimetria": stats.skew(r, bias=False),
         "curtosis": stats.kurtosis(r, fisher=True, bias=False),
     }
-    return pd.DataFrame.from_dict(data, orient="index", columns=["valor"])
+    df = pd.DataFrame.from_dict(data, orient="index", columns=["valor"])
+    df["valor"] = pd.to_numeric(df["valor"], errors="coerce")
+    return df
 
 
 def normality_tests(returns: pd.Series) -> pd.DataFrame:

@@ -60,13 +60,18 @@ def benchmark_summary(
     portfolio_returns: pd.Series,
     benchmark_returns: pd.Series,
     rf_annual: float,
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
     """
     Tabla resumen portafolio vs benchmark.
     """
     df = pd.concat([portfolio_returns, benchmark_returns], axis=1).dropna()
     if df.empty:
-        return pd.DataFrame()
+        return (
+            pd.DataFrame(),
+            pd.DataFrame(),
+            pd.Series(dtype=float),
+            pd.Series(dtype=float),
+        )
 
     df.columns = ["portfolio", "benchmark"]
 
@@ -103,5 +108,7 @@ def benchmark_summary(
             "valor": [alpha, te, ir],
         }
     )
+
+    extras["valor"] = pd.to_numeric(extras["valor"], errors="coerce")
 
     return summary, extras, cum_port, cum_bench

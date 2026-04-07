@@ -88,17 +88,16 @@ def download_single_ticker(ticker: str, start: str, end: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+from src.api.market import get_multiple_prices
+
 @st.cache_data(show_spinner=False, ttl=3600)
 def download_multiple_tickers(tickers: List[str], start: str, end: str) -> Dict[str, pd.DataFrame]:
     """
-    Descarga múltiples tickers de forma individual para evitar problemas
-    con multiíndices complejos de yfinance.
+    Descarga múltiples tickers usando la nueva capa API.
     """
     ensure_project_dirs()
-    data: Dict[str, pd.DataFrame] = {}
 
-    for ticker in tickers:
-        data[ticker] = download_single_ticker(ticker=ticker, start=start, end=end)
+    data = get_multiple_prices(tickers=tickers, start=start, end=end)
 
     return data
 

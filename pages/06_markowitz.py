@@ -11,7 +11,7 @@ from src.markowitz import (
     weights_table,
 )
 from src.plots import plot_correlation_heatmap, plot_frontier
-from src.macro import macro_snapshot
+from src.api.macro import macro_snapshot
 
 ensure_project_dirs()
 st.title("Módulo 6 - Optimización de portafolio (Markowitz)")
@@ -48,7 +48,7 @@ rf_annual = (
 
 corr = returns.corr()
 st.subheader("Matriz de correlación")
-st.plotly_chart(plot_correlation_heatmap(corr), use_container_width=True)
+st.plotly_chart(plot_correlation_heatmap(corr), width="stretch")
 
 sim_df = simulate_portfolios(returns, rf_annual=rf_annual, n_portfolios=n_portfolios)
 
@@ -69,14 +69,14 @@ if min_var.empty or max_sharpe.empty:
     st.error("No fue posible identificar los portafolios óptimos.")
     st.stop()
 
-st.plotly_chart(plot_frontier(sim_df, frontier_df, min_var, max_sharpe), use_container_width=True)
+st.plotly_chart(plot_frontier(sim_df, frontier_df, min_var, max_sharpe), width="stretch")
 
 col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("Portafolio de mínima varianza")
-    st.dataframe(weights_table(min_var), use_container_width=True)
+    st.dataframe(weights_table(min_var), width="stretch")
 
 with col2:
     st.subheader("Portafolio de máximo Sharpe")
-    st.dataframe(weights_table(max_sharpe), use_container_width=True)
+    st.dataframe(weights_table(max_sharpe), width="stretch")

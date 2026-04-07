@@ -37,16 +37,16 @@ st.markdown(
 )
 
 st.subheader("Comparación de modelos")
-st.dataframe(results["comparison"], use_container_width=True)
+st.dataframe(results["comparison"], width="stretch")
 
 col1, col2 = st.columns(2)
 with col1:
-    st.plotly_chart(plot_volatility(results["volatility"]), use_container_width=True)
+    st.plotly_chart(plot_volatility(results["volatility"]), width="stretch")
 with col2:
-    st.plotly_chart(plot_forecast(results["forecast"]), use_container_width=True)
+    st.plotly_chart(plot_forecast(results["forecast"]), width="stretch")
 
 st.subheader("Diagnóstico")
-st.dataframe(results["diagnostics"], use_container_width=True)
+st.dataframe(results["diagnostics"], width="stretch")
 
 st.subheader("Residuos estandarizados")
-st.dataframe(results["std_resid"].tail(20), use_container_width=True)
+st.dataframe(results["std_resid"].tail(20), width="stretch")

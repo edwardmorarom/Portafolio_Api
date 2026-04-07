@@ -9,7 +9,7 @@ from src.config import (
 )
 from src.download import load_market_bundle
 from src.preprocess import equal_weight_portfolio
-from src.macro import macro_snapshot
+from src.api.macro import macro_snapshot
 from src.benchmark import benchmark_summary
 from src.plots import plot_benchmark_base100
 
@@ -35,24 +35,36 @@ benchmark_returns = returns[GLOBAL_BENCHMARK]
 macro = macro_snapshot()
 rf_annual = macro["risk_free_rate_pct"] / 100 if macro["risk_free_rate_pct"] == macro["risk_free_rate_pct"] else 0.03
 
-col1, col2, col3 = st.columns(3)
-col1.metric("Tasa libre de riesgo (%)", f"{macro['risk_free_rate_pct']:.2f}" if macro["risk_free_rate_pct"] == macro["risk_free_rate_pct"] else "N/D")
-col2.metric("Inflación interanual", f"{macro['inflation_yoy']:.2%}" if macro["inflation_yoy"] == macro["inflation_yoy"] else "N/D")
-col3.metric("COP por USD", f"{macro['cop_per_usd']:.2f}" if macro["cop_per_usd"] == macro["cop_per_usd"] else "N/D")
-
+col1, col2, col3, col4 = st.columns(4)
+col1.metric(
+    "Tasa libre de riesgo (%)",
+    f"{macro['risk_free_rate_pct']:.2f}" if macro["risk_free_rate_pct"] == macro["risk_free_rate_pct"] else "N/D"
+)
+col2.metric(
+    "Inflación interanual",
+    f"{macro['inflation_yoy']:.2%}" if macro["inflation_yoy"] == macro["inflation_yoy"] else "N/D"
+)
+col3.metric(
+    "USD/COP (spot)",
+    f"{macro['usdcop_market']:.2f}" if macro["usdcop_market"] == macro["usdcop_market"] else "N/D"
+)
+col4.metric(
+    "USD/COP (promedio anual)",
+    f"{macro['cop_per_usd']:.2f}" if macro["cop_per_usd"] == macro["cop_per_usd"] else "N/D"
+)
 summary_df, extras_df, cum_port, cum_bench = benchmark_summary(
     portfolio_returns=portfolio_returns,
     benchmark_returns=benchmark_returns,
     rf_annual=rf_annual,
 )
 
-st.plotly_chart(plot_benchmark_base100(cum_port, cum_bench), use_container_width=True)
+st.plotly_chart(plot_benchmark_base100(cum_port, cum_bench), width="stretch")
 
 st.subheader("Desempeño: portafolio vs benchmark")
-st.dataframe(summary_df, use_container_width=True)
+st.dataframe(summary_df, width="stretch")
 
 st.subheader("Métricas adicionales")
-st.dataframe(extras_df, use_container_width=True)
+st.dataframe(extras_df, width="stretch")
 
 st.info(
     "Este módulo compara el portafolio con un benchmark global y resume alpha, tracking error e information ratio."

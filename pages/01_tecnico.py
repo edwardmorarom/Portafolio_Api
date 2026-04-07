@@ -42,24 +42,24 @@ ind = compute_all_indicators(
 )
 
 st.subheader(f"{asset_name} ({ticker})")
-st.plotly_chart(plot_price_and_mas(ind, sma_col=f"SMA_{sma_window}", ema_col=f"EMA_{ema_window}"), use_container_width=True)
+st.plotly_chart(plot_price_and_mas(ind, sma_col=f"SMA_{sma_window}", ema_col=f"EMA_{ema_window}"), width="stretch")
 st.info("SMA y EMA ayudan a visualizar tendencia. La EMA reacciona más rápido a cambios recientes.")
 
 col1, col2 = st.columns(2)
 with col1:
-    st.plotly_chart(plot_bollinger(ind), use_container_width=True)
+    st.plotly_chart(plot_bollinger(ind), width="stretch")
     st.info("Las Bandas de Bollinger muestran dispersión alrededor de la media móvil.")
 with col2:
-    st.plotly_chart(plot_rsi(ind, rsi_col=f"RSI_{rsi_window}"), use_container_width=True)
+    st.plotly_chart(plot_rsi(ind, rsi_col=f"RSI_{rsi_window}"), width="stretch")
     st.info("RSI mayor a 70 puede sugerir sobrecompra; menor a 30, sobreventa.")
 
 col3, col4 = st.columns(2)
 with col3:
-    st.plotly_chart(plot_macd(ind), use_container_width=True)
+    st.plotly_chart(plot_macd(ind), width="stretch")
     st.info("MACD ayuda a detectar cambios de momentum y cruces de señal.")
 with col4:
-    st.plotly_chart(plot_stochastic(ind), use_container_width=True)
+    st.plotly_chart(plot_stochastic(ind), width="stretch")
     st.info("El Estocástico compara el cierre actual con el rango reciente del precio.")
 
 st.subheader("Últimos datos con indicadores")
-st.dataframe(ind.tail(15), use_container_width=True)
+st.dataframe(ind.tail(15), width="stretch")

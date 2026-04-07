@@ -92,4 +92,4 @@ for asset_name, meta in ASSETS.items():
         st.write(f"**Señales activas:** {', '.join(active) if active else 'Ninguna'}")
 
         with st.expander("Ver detalle de señales"):
-            st.dataframe(signal_table(flags), use_container_width=True, hide_index=True)
+            st.dataframe(signal_table(flags), width="stretch", hide_index=True)
