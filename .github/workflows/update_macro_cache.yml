@@ -21,9 +21,11 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pandas numpy requests yfinance wbgapi python-dotenv
+          pip install pandas numpy requests yfinance wbgapi python-dotenv streamlit
 
       - name: Run macro update script
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: |
           python scripts/update_macro_cache.py
 
