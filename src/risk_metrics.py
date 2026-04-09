@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from typing import Any, Dict, List
+
 import numpy as np
 import pandas as pd
-from scipy.stats import norm
+from scipy.stats import chi2, norm
 
 from src.config import TRADING_DAYS
-from scipy.stats import chi2
 
 
 def annual_to_daily_rf(rf_annual: float, periods: int = TRADING_DAYS) -> float:
@@ -49,6 +50,132 @@ def validate_returns_series(returns: pd.Series, min_obs: int = 30) -> pd.Series:
         raise ValueError("La serie de rendimientos tiene varianza nula o casi nula.")
 
     return clean
+
+
+def validar_serie_para_garch(
+    returns: pd.Series,
+    min_obs: int = 120,
+    max_null_ratio: float = 0.05,
+) -> Dict[str, Any]:
+    """
+    Valida si una serie de rendimientos es apta para ajustar un modelo GARCH.
+
+    Retorna un diccionario con:
+    - ok: bool
+    - serie_limpia: pd.Series
+    - errores: list[str]
+    - advertencias: list[str]
+    - resumen: dict
+    """
+    errores: List[str] = []
+    advertencias: List[str] = []
+
+    if returns is None:
+        return {
+            "ok": False,
+            "serie_limpia": pd.Series(dtype=float),
+            "errores": ["La serie de rendimientos no existe."],
+            "advertencias": [],
+            "resumen": {},
+        }
+
+    if not isinstance(returns, pd.Series):
+        try:
+            returns = pd.Series(returns)
+        except Exception:
+            return {
+                "ok": False,
+                "serie_limpia": pd.Series(dtype=float),
+                "errores": ["No fue posible convertir la entrada a una serie de pandas."],
+                "advertencias": [],
+                "resumen": {},
+            }
+
+    n_original = len(returns)
+
+    if n_original == 0:
+        return {
+            "ok": False,
+            "serie_limpia": pd.Series(dtype=float),
+            "errores": ["La serie de rendimientos está vacía."],
+            "advertencias": [],
+            "resumen": {},
+        }
+
+    if not isinstance(returns.index, pd.DatetimeIndex):
+        advertencias.append(
+            "La serie no tiene índice temporal tipo DatetimeIndex. "
+            "El ajuste puede ejecutarse, pero pierdes trazabilidad cronológica."
+        )
+
+    serie = pd.to_numeric(returns, errors="coerce").replace([np.inf, -np.inf], np.nan)
+
+    null_ratio = float(serie.isna().mean())
+    if null_ratio > max_null_ratio:
+        advertencias.append(
+            f"La serie tiene {null_ratio:.1%} de valores faltantes o no válidos antes de limpiar."
+        )
+
+    serie = serie.dropna()
+    n_limpio = len(serie)
+
+    if n_limpio < min_obs:
+        errores.append(
+            f"La serie limpia tiene solo {n_limpio} observaciones; "
+            f"se requieren al menos {min_obs} para ajustar GARCH con mayor estabilidad."
+        )
+
+    if n_limpio < 30:
+        errores.append(
+            "La muestra es demasiado corta para modelar volatilidad condicional de forma defendible."
+        )
+
+    if serie.empty:
+        errores.append("Después de limpiar nulos e infinitos, la serie quedó vacía.")
+
+    std = float(serie.std(ddof=1)) if n_limpio > 1 else 0.0
+    if np.isclose(std, 0.0):
+        errores.append(
+            "La desviación estándar de la serie es cero o casi cero; no hay variabilidad suficiente para GARCH."
+        )
+
+    zero_ratio = float((np.isclose(serie, 0.0)).mean()) if n_limpio > 0 else 1.0
+    if zero_ratio > 0.80:
+        advertencias.append(
+            f"El {zero_ratio:.1%} de la serie son ceros o casi ceros. "
+            "Esto puede afectar la estabilidad del ajuste."
+        )
+
+    if isinstance(serie.index, pd.DatetimeIndex):
+        if not serie.index.is_monotonic_increasing:
+            advertencias.append(
+                "La serie temporal no está ordenada cronológicamente. "
+                "Se ordenará antes del ajuste."
+            )
+            serie = serie.sort_index()
+
+        if serie.index.has_duplicates:
+            advertencias.append(
+                "La serie contiene fechas duplicadas. "
+                "Revisa si hubo problemas al descargar o combinar datos."
+            )
+
+    resumen = {
+        "n_original": n_original,
+        "n_limpio": n_limpio,
+        "null_ratio": null_ratio,
+        "zero_ratio": zero_ratio,
+        "std": std,
+        "mean": float(serie.mean()) if n_limpio > 0 else np.nan,
+    }
+
+    return {
+        "ok": len(errores) == 0,
+        "serie_limpia": serie,
+        "errores": errores,
+        "advertencias": advertencias,
+        "resumen": resumen,
+    }
 
 
 def validate_weights(weights: np.ndarray, n_assets: int | None = None) -> np.ndarray:
@@ -218,6 +345,7 @@ def risk_comparison_table(
 
     return pd.DataFrame(rows)
 
+
 def kupiec_test(returns: pd.Series, var: float, alpha: float = 0.95) -> dict:
     """
     Test de Kupiec (Proportion of Failures - POF).
@@ -229,7 +357,6 @@ def kupiec_test(returns: pd.Series, var: float, alpha: float = 0.95) -> dict:
     - var: VaR como pérdida positiva (ej: 0.03)
     - alpha: nivel de confianza (ej: 0.95)
     """
-
     validate_confidence_level(alpha)
 
     try:
@@ -237,7 +364,6 @@ def kupiec_test(returns: pd.Series, var: float, alpha: float = 0.95) -> dict:
     except ValueError:
         return {}
 
-    # 🔥 violaciones: cuando pérdida supera el VaR
     violations = r < -var
 
     n = len(r)
@@ -249,7 +375,6 @@ def kupiec_test(returns: pd.Series, var: float, alpha: float = 0.95) -> dict:
     p = 1 - alpha
     p_hat = x / n
 
-    # ⚠️ evitar problemas numéricos extremos
     if p_hat == 0 or p_hat == 1:
         return {
             "violations": x,
@@ -261,7 +386,6 @@ def kupiec_test(returns: pd.Series, var: float, alpha: float = 0.95) -> dict:
             "conclusion": "Insuficiente variabilidad para test",
         }
 
-    # 🔥 Likelihood Ratio (Kupiec)
     lr = -2 * (
         (n - x) * np.log((1 - p) / (1 - p_hat)) +
         x * np.log(p / p_hat)
