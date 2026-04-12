@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import streamlit as st
+import yfinance as yf
 
 from src.config import ASSETS, DEFAULT_START_DATE, DEFAULT_END_DATE, ensure_project_dirs
 from src.download import load_market_bundle, download_single_ticker
@@ -259,13 +260,40 @@ if garch_validation["ok"]:
 # ==============================
 # Benchmark
 # ==============================
-benchmark_returns = bundle.get("benchmark_returns", pd.Series(dtype=float))
 summary_df = pd.DataFrame()
 extras_df = pd.DataFrame()
 cum_port = pd.Series(dtype=float)
 cum_bench = pd.Series(dtype=float)
 
-if isinstance(benchmark_returns, pd.Series) and not benchmark_returns.empty:
+try:
+    bench_df = yf.download("^GSPC", start=str(start_date), end=str(end_date), auto_adjust=False)
+
+    if bench_df.empty:
+        benchmark_returns = pd.Series(dtype=float)
+    else:
+        if isinstance(bench_df.columns, pd.MultiIndex):
+            if ("Adj Close", "^GSPC") in bench_df.columns:
+                benchmark_prices = bench_df[("Adj Close", "^GSPC")]
+            elif ("Close", "^GSPC") in bench_df.columns:
+                benchmark_prices = bench_df[("Close", "^GSPC")]
+            else:
+                benchmark_prices = pd.Series(dtype=float)
+        else:
+            if "Adj Close" in bench_df.columns:
+                benchmark_prices = bench_df["Adj Close"]
+            elif "Close" in bench_df.columns:
+                benchmark_prices = bench_df["Close"]
+            else:
+                benchmark_prices = pd.Series(dtype=float)
+
+        benchmark_prices = pd.to_numeric(benchmark_prices, errors="coerce").dropna()
+        benchmark_returns = benchmark_prices.pct_change().dropna()
+
+except Exception as e:
+    st.error(f"Error cargando benchmark: {e}")
+    benchmark_returns = pd.Series(dtype=float)
+
+if not benchmark_returns.empty:
     summary_df, extras_df, cum_port, cum_bench = benchmark_summary(
         portfolio_returns=portfolio_returns,
         benchmark_returns=benchmark_returns,
@@ -300,6 +328,9 @@ decision_title, decision_msg = _final_decision(
 # Cabecera ejecutiva
 # ==============================
 st.subheader("Lectura ejecutiva")
+st.caption(
+    "La evaluación combina información estadística, técnica y de mercado para construir una visión integral del portafolio."
+)
 
 col1, col2, col3 = st.columns(3)
 col1.metric("Riesgo", risk_level)
@@ -313,9 +344,20 @@ col6.metric("Persistencia GARCH", f"{persistencia:.3f}" if pd.notna(persistencia
 
 st.markdown("---")
 
-st.subheader("Decisión sugerida")
-st.write(f"**{decision_title}**")
-st.write(decision_msg)
+st.subheader("Lectura estratégica del portafolio")
+st.markdown(f"### {decision_title}")
+st.write(
+    f"""
+    {decision_msg}
+
+    Esta conclusión se basa en la integración de métricas de riesgo extremo (VaR/CVaR),
+    dinámica de volatilidad (GARCH), señales técnicas agregadas y desempeño relativo
+    frente al benchmark de mercado.
+
+    La lectura no debe interpretarse como una recomendación aislada, sino como una
+    evaluación conjunta del perfil riesgo-retorno del portafolio en el contexto actual.
+    """
+)
 
 # ==============================
 # Comentarios integrados
