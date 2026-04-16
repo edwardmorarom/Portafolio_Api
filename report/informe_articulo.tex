@@ -54,12 +54,38 @@ Se ajustaron modelos ARCH(1), GARCH(1,1) y EGARCH(1,1), comparados mediante AIC 
 Se estimó beta para cada activo frente a un benchmark local y se calculó el rendimiento esperado con CAPM.
 
 \subsection{VaR y CVaR}
-Se emplearon tres métodos:
+Para la cuantificación del riesgo extremo del portafolio se definió la variable aleatoria de rendimiento del portafolio en el tiempo \(t\) como
+\[
+R_{p,t}=\sum_{i=1}^{n} w_i R_{i,t},
+\]
+donde \(w_i\) representa el peso del activo \(i\) en el portafolio y \(R_{i,t}\) su rendimiento en el periodo \(t\). A partir de esta definición, la variable de pérdida se modeló como
+\[
+L_t=-R_{p,t},
+\]
+de modo que valores positivos de \(L_t\) representan pérdidas y valores negativos representan ganancias.
+
+Bajo esta convención, el \textit{Value at Risk} al nivel de confianza \(\alpha\in(0,1)\) se define como el cuantil de orden \(\alpha\) de la distribución de pérdidas:
+\[
+VaR_{\alpha}(L)=\inf\{l\in\mathbb{R}: P(L\leq l)\geq \alpha\}.
+\]
+En términos prácticos, \(VaR_{\alpha}\) representa la pérdida máxima esperada que no se excede con probabilidad \(\alpha\) en un horizonte de un periodo. Por ejemplo, un \(VaR_{0.95}=0.025\) indica que, con un 95\% de confianza, la pérdida del portafolio no superaría el 2.5\% en un día.
+
+Como complemento, se empleó el \textit{Conditional Value at Risk} (CVaR), también conocido como \textit{Expected Shortfall}, definido como la pérdida esperada condicionada a que la pérdida exceda el VaR:
+\[
+CVaR_{\alpha}(L)=E[L \mid L \geq VaR_{\alpha}(L)].
+\]
+Esta medida resulta especialmente importante en teoría del riesgo porque no solo identifica un umbral crítico, sino que además cuantifica la severidad promedio de las pérdidas extremas más allá de dicho umbral.
+
+Para estimar \(VaR\) y \(CVaR\) se utilizaron tres enfoques complementarios:
 \begin{itemize}
-    \item Paramétrico
-    \item Histórico
-    \item Monte Carlo
+    \item \textbf{Método paramétrico:} asume que los rendimientos del portafolio siguen aproximadamente una distribución normal, por lo que el VaR se estima a partir de la media, la desviación estándar y el cuantil de la normal estándar.
+    \item \textbf{Método histórico:} no impone una distribución teórica, sino que calcula el cuantil empírico de la muestra observada de pérdidas.
+    \item \textbf{Método Monte Carlo:} genera escenarios simulados de rendimientos a partir de una distribución normal multivariada calibrada con la media y la matriz de covarianza muestral de los activos, obteniendo así una distribución simulada de pérdidas del portafolio.
 \end{itemize}
+
+La comparación entre estos tres métodos permite evaluar la sensibilidad de las medidas de riesgo frente a diferentes supuestos de modelación. Mientras el enfoque paramétrico depende fuertemente de la hipótesis de normalidad, el histórico recoge directamente la experiencia muestral y el método Monte Carlo permite construir escenarios sintéticos consistentes con la estructura de dependencia estimada entre los activos.
+
+Adicionalmente, se utilizó el test de Kupiec para evaluar la capacidad de cobertura del VaR estimado, contrastando si la frecuencia observada de excedencias es consistente con el nivel de confianza seleccionado.
 
 \subsection{Markowitz}
 Se simularon 10{,}000 portafolios para construir el conjunto factible y la frontera eficiente.
