@@ -269,56 +269,75 @@ else:
 # ==============================
 st.markdown("### Interpretación")
 
-mensajes = []
+lectura_simple = f"""
+**Lectura sencilla**
+
+- Con {int(alpha * 100)}% de confianza, la pérdida diaria del portafolio no superaría aproximadamente **{var_h:.2%}**.
+- Si ocurre un evento extremo que supera ese umbral, la pérdida promedio podría acercarse a **{cvar_h:.2%}**.
+- El CVaR es más severo que el VaR porque se enfoca en los peores escenarios.
+"""
+
+interpretacion_tecnica = []
 
 if var_h is not None and cvar_h is not None:
-    mensajes.append(
+    interpretacion_tecnica.append(
         f"Con {int(alpha * 100)}% de confianza, el **VaR histórico diario** del portafolio es **{var_h:.2%}**, "
         f"mientras que el **CVaR histórico diario** es **{cvar_h:.2%}**."
     )
-    mensajes.append(
+    interpretacion_tecnica.append(
         "Esto implica que, en escenarios de pérdida extrema, el promedio de pérdidas severas supera el umbral del VaR, "
         "lo cual es consistente con la interpretación del CVaR como medida más sensible al riesgo de cola."
     )
 
 if var_p is not None and var_h is not None:
     if var_p < var_h:
-        mensajes.append(
+        interpretacion_tecnica.append(
             "El VaR paramétrico es menor que el VaR histórico, lo que puede sugerir que el supuesto de normalidad "
             "subestima el riesgo extremo frente a la evidencia empírica."
         )
     elif var_p > var_h:
-        mensajes.append(
+        interpretacion_tecnica.append(
             "El VaR paramétrico es mayor que el VaR histórico, lo que sugiere una estimación más conservadora "
             "bajo el supuesto normal."
         )
     else:
-        mensajes.append("El VaR paramétrico y el VaR histórico son muy similares para esta muestra.")
+        interpretacion_tecnica.append(
+            "El VaR paramétrico y el VaR histórico son muy similares para esta muestra."
+        )
 
 if var_mc is not None:
-    mensajes.append(
+    interpretacion_tecnica.append(
         f"El **VaR Monte Carlo diario** estimado es **{var_mc:.2%}**, útil para contrastar "
         "la sensibilidad del riesgo ante simulaciones probabilísticas."
     )
 
-if modo == "General":
-    st.success(
-        f"""
-        **Lectura sencilla**
-        - Con {int(alpha * 100)}% de confianza, la pérdida diaria del portafolio no superaría aproximadamente **{var_h:.2%}**.
-        - Si ocurre un evento extremo que supera ese umbral, la pérdida promedio podría acercarse a **{cvar_h:.2%}**.
-        - El CVaR es más severo que el VaR porque se enfoca en los peores escenarios.
+st.success(lectura_simple)
+
+tab1, tab2 = st.tabs(["Interpretación por métodos", "Advertencia metodológica"])
+
+with tab1:
+    for msg in interpretacion_tecnica:
+        st.write(f"- {msg}")
+
+with tab2:
+    st.warning(
+        "El VaR paramétrico depende del supuesto de normalidad. Si la distribución de rendimientos presenta colas pesadas "
+        "o asimetría, este método puede subestimar el riesgo extremo."
+    )
+
+with st.expander("Ver interpretación técnica completa"):
+    st.write(
+        """
+        El VaR resume una pérdida umbral bajo un nivel de confianza dado, mientras que el CVaR
+        captura la pérdida promedio cuando ese umbral ya fue superado. Por eso el CVaR ofrece una
+        lectura más sensible del riesgo extremo.
+
+        La comparación entre enfoque histórico, paramétrico y Monte Carlo permite evaluar si el riesgo
+        estimado depende fuertemente de supuestos distribucionales o de simulación.
         """
     )
-else:
-    if mostrar_interpretacion_tecnica:
-        for msg in mensajes:
-            st.info(msg)
-
-        st.warning(
-            "El VaR paramétrico depende del supuesto de normalidad. Si la distribución de rendimientos presenta colas pesadas "
-            "o asimetría, este método puede subestimar el riesgo extremo."
-        )
+    for msg in interpretacion_tecnica:
+        st.write(f"- {msg}")
 
 # ==============================
 # Backtesting VaR - Test de Kupiec
