@@ -303,7 +303,10 @@ def monte_carlo_var_cvar(
 ) -> dict:
     """
     VaR y CVaR de Monte Carlo usando normal multivariada.
-    Se reportan como pérdidas positivas.
+
+    Convención:
+    - Se define la pérdida como L = -R_p
+    - VaR y CVaR se reportan como pérdidas positivas
     """
     validate_confidence_level(alpha)
 
@@ -330,13 +333,28 @@ def monte_carlo_var_cvar(
 
     rng = np.random.default_rng(seed)
     sims = rng.multivariate_normal(mu, cov, size=n_sim)
+
+    # Rendimientos simulados del portafolio
     port_sim = sims @ w
 
-    cutoff = np.quantile(port_sim, 1 - alpha)
-    tail = port_sim[port_sim <= cutoff]
+    q = 1 - alpha
 
-    var_daily = max(0.0, -cutoff)
-    cvar_daily = max(0.0, -tail.mean()) if len(tail) > 0 else 0.0
+    # Cuantil de los retornos simulados
+    return_cutoff = np.quantile(port_sim, q)
+
+    # Cola de pérdidas (peores escenarios)
+    tail_returns = port_sim[port_sim <= return_cutoff]
+
+    # Conversión a pérdidas: L = -R
+    var_daily = max(0.0, -return_cutoff)
+
+    if len(tail_returns) > 0:
+        cvar_daily = max(0.0, -tail_returns.mean())
+    else:
+        cvar_daily = var_daily
+
+    # Coherencia mínima
+    cvar_daily = max(var_daily, cvar_daily)
 
     return {
         "VaR_diario": float(var_daily),
@@ -345,7 +363,6 @@ def monte_carlo_var_cvar(
         "CVaR_anualizado": float(cvar_daily * np.sqrt(TRADING_DAYS)),
         "simulated_returns": port_sim,
     }
-
 
 def risk_comparison_table(
     portfolio_returns: pd.Series,
