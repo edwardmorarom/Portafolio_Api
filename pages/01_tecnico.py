@@ -14,6 +14,8 @@ from src.plots import (
 
 from ui.dashboard_ui import (
     aplicar_estilos_globales,
+    render_sidebar_brand,
+    render_sidebar_panel,
     header_dashboard,
     seccion,
     titulo_con_ayuda,
@@ -21,17 +23,42 @@ from ui.dashboard_ui import (
     nota,
 )
 
-from ui.dashboard_filters import (
-    selector_modo,
-    ayuda_contextual,
-)
+from ui.dashboard_filters import ayuda_contextual
 
 ensure_project_dirs()
 
 # ==============================
-# ESTILOS GLOBALES
+# ESTILOS + SIDEBAR
 # ==============================
 aplicar_estilos_globales()
+
+render_sidebar_brand(
+    title="Dashboard Riesgo",
+    subtitle="Universidad Santo Tomás",
+    logo_path="assets/escudo_santo_tomas.png",
+)
+
+modo, filtros_sidebar = render_sidebar_panel(
+    modo_default="General",
+    filtros_label="Parámetros Técnicos Avanzados",
+    filtros_expanded=False,
+)
+
+with filtros_sidebar:
+    asset_name = st.selectbox("Activo", list(ASSETS.keys()), key="tec_asset")
+
+    horizonte = st.selectbox(
+        "Horizonte",
+        ["1 mes", "Trimestre", "Semestre", "1 año", "3 años", "5 años", "Personalizado"],
+        index=3,
+        key="tec_horizonte",
+    )
+
+    sma_window = st.slider("Ventana SMA", 5, 60, 20, key="tec_sma")
+    ema_window = st.slider("Ventana EMA", 5, 60, 20, key="tec_ema")
+    rsi_window = st.slider("Ventana RSI", 5, 30, 14, key="tec_rsi")
+    bb_window = st.slider("Bollinger", 10, 60, 20, key="tec_bb")
+    stoch_window = st.slider("Estocástico", 5, 30, 14, key="tec_stoch")
 
 # ==============================
 # HEADER
@@ -42,47 +69,6 @@ header_dashboard(
 )
 
 nota("Este módulo permite analizar el comportamiento del activo mediante indicadores técnicos clave.")
-
-# ==============================
-# FILTROS
-# ==============================
-with st.container():
-    st.markdown("""
-    <div style="
-        background: rgba(15,23,42,0.85);
-        border: 1px solid rgba(148,163,184,0.12);
-        border-radius: 16px;
-        padding: 1.2rem;
-        margin-bottom: 1.2rem;
-        box-shadow: 0 8px 25px rgba(0,0,0,0.25);
-    ">
-    """, unsafe_allow_html=True)
-
-    st.markdown("### Configuración del análisis")
-    st.caption("Selecciona el modo y ajusta los parámetros del análisis técnico.")
-
-    modo = selector_modo()
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        asset_name = st.selectbox("Activo", list(ASSETS.keys()))
-
-    with col2:
-        horizonte = st.selectbox(
-            "Horizonte",
-            ["1 mes", "Trimestre", "Semestre", "1 año", "3 años", "5 años", "Personalizado"],
-            index=3
-        )
-
-    with st.expander("⚙️ Parámetros técnicos avanzados"):
-        sma_window = st.slider("Ventana SMA", 5, 60, 20, key="tec_sma")
-        ema_window = st.slider("Ventana EMA", 5, 60, 20, key="tec_ema")
-        rsi_window = st.slider("Ventana RSI", 5, 30, 14, key="tec_rsi")
-        bb_window = st.slider("Bollinger", 10, 60, 20, key="tec_bb")
-        stoch_window = st.slider("Estocástico", 5, 30, 14, key="tec_stoch")
-
-    st.markdown("</div>", unsafe_allow_html=True)
 
 # ==============================
 # FECHAS
@@ -110,9 +96,9 @@ elif horizonte == "5 años":
 else:
     fecha_col1, fecha_col2 = st.columns(2)
     with fecha_col1:
-        start_date = st.date_input("Fecha inicial", DEFAULT_START_DATE, key="tec_fecha_inicial")
+        start_date = st.date_input("Fecha Inicial", DEFAULT_START_DATE, key="tec_fecha_inicial")
     with fecha_col2:
-        end_date = st.date_input("Fecha final", DEFAULT_END_DATE, key="tec_fecha_final")
+        end_date = st.date_input("Fecha Final", DEFAULT_END_DATE, key="tec_fecha_final")
 
 # ==============================
 # DATOS
@@ -121,7 +107,7 @@ ticker = get_ticker(asset_name)
 df = download_single_ticker(ticker, str(start_date), str(end_date))
 
 if df.empty:
-    st.error("No se pudieron descargar datos.")
+    st.error("No Se Pudieron Descargar Datos.")
     st.stop()
 
 ind = compute_all_indicators(
@@ -134,7 +120,7 @@ ind = compute_all_indicators(
 )
 
 if ind.empty:
-    st.error("No fue posible calcular indicadores técnicos.")
+    st.error("No Fue Posible Calcular Indicadores Técnicos.")
     st.stop()
 
 # ==============================
@@ -143,17 +129,17 @@ if ind.empty:
 seccion("Resumen")
 
 if modo == "General":
-    nota(f"Vista general del comportamiento de {asset_name} ({ticker}).")
+    nota(f"Vista General Del Comportamiento De {asset_name} ({ticker}).")
 else:
     ayuda_contextual(
-        "Interpretación técnica",
-        "Se utilizan indicadores para evaluar tendencia, dispersión y momentum del activo."
+        "Interpretación Técnica",
+        "Se Utilizan Indicadores Para Evaluar Tendencia, Dispersión Y Momentum Del Activo."
     )
 
 # ==============================
 # KPIs
 # ==============================
-seccion("KPIs del activo")
+seccion("KPIs Del Activo")
 
 close_now = float(ind["Close"].iloc[-1]) if "Close" in ind.columns else None
 close_prev = float(ind["Close"].iloc[-2]) if "Close" in ind.columns and len(ind) > 1 else None
@@ -172,39 +158,38 @@ with c1:
         "Precio",
         f"{close_now:,.2f}" if close_now is not None else "N/D",
         f"{delta:.2%}" if delta is not None else "",
-        help_text="Último precio de cierre disponible para el activo en el periodo consultado."
+        help_text="Último Precio De Cierre Disponible Para El Activo En El Periodo Consultado."
     )
 
 with c2:
     tarjeta_kpi(
         "RSI",
         f"{rsi_now:.2f}" if rsi_now is not None else "N/D",
-        help_text="El RSI mide momentum. Valores altos pueden sugerir sobrecompra y valores bajos sobreventa."
+        help_text="El RSI Mide Momentum. Valores Altos Pueden Sugerir Sobrecompra Y Valores Bajos Sobreventa."
     )
 
 with c3:
     tarjeta_kpi(
         "SMA",
         f"{sma_now:.2f}" if sma_now is not None else "N/D",
-        help_text="La SMA es una media móvil simple que suaviza el precio y ayuda a identificar tendencia."
+        help_text="La SMA Es Una Media Móvil Simple Que Suaviza El Precio Y Ayuda A Identificar Tendencia."
     )
 
 with c4:
     tarjeta_kpi(
         "EMA",
         f"{ema_now:.2f}" if ema_now is not None else "N/D",
-        help_text="La EMA da más peso a los datos recientes y reacciona más rápido a cambios del precio."
+        help_text="La EMA Da Más Peso A Los Datos Recientes Y Reacciona Más Rápido A Cambios Del Precio."
     )
 
 # ==============================
 # GRÁFICO PRINCIPAL
 # ==============================
-seccion("Tendencia del precio")
+seccion("Tendencia Del Precio")
 
 titulo_con_ayuda(
-    "Precio con medias móviles",
-    "Compara el precio del activo con la SMA y la EMA para evaluar tendencia y detectar posibles cambios recientes.",
-    nivel=3
+    "Precio Con Medias Móviles",
+    "Compara El Precio Del Activo Con La SMA Y La EMA Para Evaluar Tendencia Y Detectar Posibles Cambios Recientes.",
 )
 
 st.plotly_chart(
@@ -222,8 +207,7 @@ col1, col2 = st.columns(2)
 with col1:
     titulo_con_ayuda(
         "RSI",
-        "El RSI mide la fuerza relativa del movimiento del precio. Valores cercanos a 70 pueden sugerir sobrecompra y cercanos a 30, sobreventa.",
-        nivel=3
+        "El RSI Mide La Fuerza Relativa Del Movimiento Del Precio. Valores Cercanos A 70 Pueden Sugerir Sobrecompra Y Cercanos A 30, Sobreventa.",
     )
     st.plotly_chart(
         plot_rsi(ind, rsi_col=f"RSI_{rsi_window}"),
@@ -232,9 +216,8 @@ with col1:
 
 with col2:
     titulo_con_ayuda(
-        "Bandas de Bollinger",
-        "Las bandas muestran dispersión alrededor de la media móvil. Su expansión suele asociarse con mayor volatilidad y su contracción con menor volatilidad.",
-        nivel=3
+        "Bandas De Bollinger",
+        "Las Bandas Muestran Dispersión Alrededor De La Media Móvil. Su Expansión Suele Asociarse Con Mayor Volatilidad Y Su Contracción Con Menor Volatilidad.",
     )
     st.plotly_chart(
         plot_bollinger(ind),
@@ -245,15 +228,14 @@ with col2:
 # AVANZADOS
 # ==============================
 if modo == "Estadístico":
-    seccion("Indicadores avanzados")
+    seccion("Indicadores Avanzados")
 
     col3, col4 = st.columns(2)
 
     with col3:
         titulo_con_ayuda(
             "MACD",
-            "El MACD ayuda a identificar cambios de momentum mediante la diferencia entre medias exponenciales y sus cruces con la línea de señal.",
-            nivel=3
+            "El MACD Ayuda A Identificar Cambios De Momentum Mediante La Diferencia Entre Medias Exponenciales Y Sus Cruces Con La Línea De Señal.",
         )
         st.plotly_chart(
             plot_macd(ind),
@@ -262,9 +244,8 @@ if modo == "Estadístico":
 
     with col4:
         titulo_con_ayuda(
-            "Oscilador estocástico",
-            "Compara el cierre actual con el rango reciente del precio para detectar zonas extremas y posibles cambios de dirección.",
-            nivel=3
+            "Oscilador Estocástico",
+            "Compara El Cierre Actual Con El Rango Reciente Del Precio Para Detectar Zonas Extremas Y Posibles Cambios De Dirección.",
         )
         st.plotly_chart(
             plot_stochastic(ind),
@@ -274,7 +255,7 @@ if modo == "Estadístico":
 # ==============================
 # TABLA
 # ==============================
-seccion("Datos recientes")
+seccion("Datos Recientes")
 
-with st.expander("Ver tabla"):
+with st.expander("Ver Tabla"):
     st.dataframe(ind.tail(15), use_container_width=True)
