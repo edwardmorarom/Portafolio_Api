@@ -73,7 +73,6 @@ def aplicar_estilos_globales():
         background: #f8fafc;
     }
 
-    /* contenedor principal del sidebar */
     [data-testid="stSidebarContent"] {
         display: flex;
         flex-direction: column;
@@ -118,7 +117,7 @@ def aplicar_estilos_globales():
     }
 
     [data-testid="stSidebarNav"] a[aria-current="page"] {
-        background: linear-gradient(135deg, #cfe3ff, #e8f1ff);
+        background: linear-gradient(135deg, #dbeafe, #edf5ff);
         border: 1px solid #7aaef8;
         color: #0b4ea2 !important;
         box-shadow: 0 6px 18px rgba(37, 99, 235, 0.16);
@@ -188,31 +187,70 @@ def aplicar_estilos_globales():
         font-weight: 600;
     }
 
-    .sidebar-divider {
-        height: 1px;
-        background: #dbe2ea;
-        border: none;
-        margin: 0.85rem 0 0.75rem 0;
-    }
-
+    /* Un solo botón: Filtros Del Módulo */
     .sidebar-filters-wrap {
         order: 3;
-        margin-top: 0.9rem;
+        margin-top: 0.95rem;
     }
 
-    .sidebar-filters-box {
-        background: #ffffff;
-        border: 1px solid #d6dbe3;
-        border-radius: 16px;
-        padding: 0.9rem;
+    [data-testid="stSidebar"] .streamlit-expander {
+        margin-top: 0.1rem;
+        border: none !important;
+        background: transparent !important;
+        box-shadow: none !important;
+        padding: 0 !important;
+    }
+
+    [data-testid="stSidebar"] .streamlit-expanderHeader {
+        background: linear-gradient(135deg, #eef4ff, #f8fbff) !important;
+        border: 1px solid #cfdcf3 !important;
+        border-radius: 18px !important;
+        padding: 0.8rem 0.95rem !important;
+        font-weight: 800 !important;
+        color: #143d79 !important;
         box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
     }
 
-    .sidebar-filters-title {
-        font-size: 1rem;
-        font-weight: 800;
+    [data-testid="stSidebar"] details[open] summary {
+        border-bottom-left-radius: 0 !important;
+        border-bottom-right-radius: 0 !important;
+        background: linear-gradient(135deg, #e7f0ff, #f7fbff) !important;
+        border-color: #bdd2f4 !important;
+    }
+
+    [data-testid="stSidebar"] details > div {
+        background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+        border: 1px solid #cfdcf3;
+        border-top: none;
+        border-bottom-left-radius: 18px;
+        border-bottom-right-radius: 18px;
+        padding: 0.95rem 0.9rem 0.85rem 0.9rem !important;
+        box-shadow: 0 8px 22px rgba(15, 23, 42, 0.08);
+        margin-top: -2px;
+    }
+
+    .sidebar-panel-label {
+        font-size: 0.92rem;
+        font-weight: 700;
         color: #143d79 !important;
-        margin-bottom: 0.65rem;
+        margin: 0.15rem 0 0.45rem 0;
+    }
+
+    [data-testid="stSidebar"] [role="radiogroup"] {
+        background: #f8fafc;
+        border: 1px solid #dbe2ea;
+        border-radius: 14px;
+        padding: 0.7rem 0.75rem;
+        margin-bottom: 0.9rem;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.85);
+    }
+
+    [data-testid="stSidebar"] [role="radiogroup"] > label {
+        display: flex;
+        align-items: center;
+        justify-content: flex-start;
+        padding: 0.32rem 0.15rem;
+        border-radius: 10px;
     }
 
     [data-testid="stSidebar"] .stSelectbox > div > div,
@@ -225,27 +263,9 @@ def aplicar_estilos_globales():
         border: 1px solid #d6dbe3 !important;
     }
 
-    [data-testid="stSidebar"] .streamlit-expanderHeader {
-        background: #ffffff;
-        border: 1px solid #d6dbe3;
-        border-radius: 12px;
-        padding: 0.25rem 0.5rem;
-        font-weight: 700;
-        color: #143d79 !important;
-    }
-
-    /* Radio mejorado dentro del bloque */
-    [data-testid="stSidebar"] [role="radiogroup"] {
-        background: #f8fafc;
-        border: 1px solid #dbe2ea;
-        border-radius: 14px;
-        padding: 0.55rem 0.65rem;
-        margin-bottom: 0.75rem;
-    }
-
-    [data-testid="stSidebar"] [role="radiogroup"] label {
-        padding: 0.28rem 0.2rem;
-        border-radius: 10px;
+    [data-testid="stSidebar"] .stCheckbox {
+        margin-top: 0.15rem;
+        margin-bottom: 0.1rem;
     }
 
     /* =========================
@@ -398,36 +418,25 @@ def render_sidebar_brand(
 
 def render_sidebar_panel(
     modo_default: str = "General",
-    filtros_label: str = "Parámetros Técnicos Avanzados",
+    filtros_label: str = "Opciones Del Módulo",
     filtros_expanded: bool = False,
 ):
-    st.sidebar.markdown(
-        """
-        <div class="sidebar-filters-wrap">
-            <div class="sidebar-filters-box">
-                <div class="sidebar-filters-title">Filtros Del Módulo</div>
-        """,
-        unsafe_allow_html=True,
-    )
+    expander = st.sidebar.expander("Filtros Del Módulo", expanded=True)
 
-    modo = st.sidebar.radio(
-        "Modo De Visualización",
-        ["General", "Estadístico"],
-        index=0 if modo_default == "General" else 1,
-        key="sidebar_modo_visualizacion",
-    )
+    with expander:
+        st.markdown('<div class="sidebar-panel-label">Modo De Visualización</div>', unsafe_allow_html=True)
 
-    expander = st.sidebar.expander(filtros_label, expanded=filtros_expanded)
+        modo = st.radio(
+            "Modo De Visualización",
+            ["General", "Estadístico"],
+            index=0 if modo_default == "General" else 1,
+            key="sidebar_modo_visualizacion",
+            label_visibility="collapsed",
+        )
 
-    st.sidebar.markdown(
-        """
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+        inner_expander = st.expander(filtros_label, expanded=filtros_expanded)
 
-    return modo, expander
+    return modo, inner_expander
 
 
 def header_dashboard(titulo: str, subtitulo: str):
