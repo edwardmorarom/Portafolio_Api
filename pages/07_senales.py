@@ -2,15 +2,21 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
+from ui.page_setup import setup_dashboard_page
+from ui.dashboard_ui import (
+    header_dashboard,
+    seccion,
+    nota,
+    tarjeta_kpi,
+    plot_card_footer,
+)
+
 from src.config import ASSETS, DEFAULT_START_DATE, DEFAULT_END_DATE, ensure_project_dirs
 from src.download import download_single_ticker
 from src.indicators import compute_all_indicators
 from src.signals import evaluate_signals
 
 ensure_project_dirs()
-st.title("Módulo 7 - Señales y alertas")
-st.caption("Resume señales técnicas por activo y las traduce en una lectura operativa más clara.")
-
 
 SIGNAL_LABELS = {
     "macd_buy": "MACD compra",
@@ -27,192 +33,195 @@ SIGNAL_LABELS = {
 
 
 # ==============================
-# UI helpers
+# SETUP GLOBAL
 # ==============================
-def inject_ui_css():
-    st.markdown(
-        """
-        <style>
-        .section-box {
-            background: #ffffff;
-            border: 1px solid rgba(15, 23, 42, 0.08);
-            border-radius: 18px;
-            padding: 16px 18px;
-            box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
-            margin-bottom: 0.8rem;
-        }
-        .section-title {
-            font-size: 1rem;
-            font-weight: 700;
-            color: #0f172a;
-            margin-bottom: 0.2rem;
-        }
-        .section-subtitle {
-            font-size: 0.86rem;
-            color: #64748b;
-            line-height: 1.45;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
+modo, filtros_sidebar = setup_dashboard_page(
+    title="Dashboard Riesgo",
+    subtitle="Universidad Santo Tomás",
+    modo_default="General",
+    filtros_label="Parámetros De Señales",
+    filtros_expanded=False,
+)
+
+
+# ==============================
+# SIDEBAR
+# ==============================
+with filtros_sidebar:
+    horizonte = st.selectbox(
+        "Horizonte de análisis",
+        [
+            "1 mes",
+            "Trimestre",
+            "Semestre",
+            "1 año",
+            "3 años",
+            "5 años",
+            "Personalizado",
+        ],
+        index=3,
+        key="sig_horizonte",
     )
 
+    fecha_fin_ref = pd.to_datetime(DEFAULT_END_DATE)
 
-def section_intro(title: str, subtitle: str):
-    st.markdown(
-        f"""
-        <div class="section-box">
-            <div class="section-title">{title}</div>
-            <div class="section-subtitle">{subtitle}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    if horizonte == "1 mes":
+        start_date = (fecha_fin_ref - pd.DateOffset(months=1)).date()
+        end_date = fecha_fin_ref.date()
+    elif horizonte == "Trimestre":
+        start_date = (fecha_fin_ref - pd.DateOffset(months=3)).date()
+        end_date = fecha_fin_ref.date()
+    elif horizonte == "Semestre":
+        start_date = (fecha_fin_ref - pd.DateOffset(months=6)).date()
+        end_date = fecha_fin_ref.date()
+    elif horizonte == "1 año":
+        start_date = (fecha_fin_ref - pd.DateOffset(years=1)).date()
+        end_date = fecha_fin_ref.date()
+    elif horizonte == "3 años":
+        start_date = (fecha_fin_ref - pd.DateOffset(years=3)).date()
+        end_date = fecha_fin_ref.date()
+    elif horizonte == "5 años":
+        start_date = (fecha_fin_ref - pd.DateOffset(years=5)).date()
+        end_date = fecha_fin_ref.date()
+    else:
+        c1, c2 = st.columns(2)
+        with c1:
+            start_date = st.date_input("Fecha inicial", value=DEFAULT_START_DATE, key="sig_start")
+        with c2:
+            end_date = st.date_input("Fecha final", value=DEFAULT_END_DATE, key="sig_end")
+
+    mostrar_detalle = st.checkbox("Mostrar detalle por activo", value=False, key="sig_detalle")
+
+    with st.expander("Filtros secundarios", expanded=False):
+        rsi_overbought = st.slider(
+            "RSI sobrecompra",
+            min_value=60,
+            max_value=90,
+            value=70,
+            key="sig_rsi_ob",
+        )
+        rsi_oversold = st.slider(
+            "RSI sobreventa",
+            min_value=10,
+            max_value=40,
+            value=30,
+            key="sig_rsi_os",
+        )
+        stoch_overbought = st.slider(
+            "Estocástico sobrecompra",
+            min_value=60,
+            max_value=95,
+            value=80,
+            key="sig_stoch_ob",
+        )
+        stoch_oversold = st.slider(
+            "Estocástico sobreventa",
+            min_value=5,
+            max_value=40,
+            value=20,
+            key="sig_stoch_os",
+        )
 
 
-def sanitize_text(text):
-    if text is None:
-        return ""
-    return str(text).replace("<", "").replace(">", "")
-
-
-def signal_card(asset_name, ticker, recommendation, semaforo_estado, semaforo_msg, score_buy, score_sell, active_text, level):
-    styles = {
-        "positive": {
-            "bg": "linear-gradient(180deg, #ecfdf5 0%, #f0fdf4 100%)",
-            "border": "rgba(22, 163, 74, 0.22)",
-            "pill_bg": "rgba(22, 163, 74, 0.14)",
-            "pill_color": "#15803d",
-        },
-        "warning": {
-            "bg": "linear-gradient(180deg, #fffbeb 0%, #fefce8 100%)",
-            "border": "rgba(234, 179, 8, 0.28)",
-            "pill_bg": "rgba(234, 179, 8, 0.16)",
-            "pill_color": "#a16207",
-        },
-        "danger": {
-            "bg": "linear-gradient(180deg, #fff1f2 0%, #fef2f2 100%)",
-            "border": "rgba(220, 38, 38, 0.22)",
-            "pill_bg": "rgba(220, 38, 38, 0.12)",
-            "pill_color": "#b91c1c",
-        },
+# ==============================
+# ESTILOS LOCALES
+# ==============================
+st.markdown(
+    """
+    <style>
+    .sig-white-panel {
+        background: #ffffff;
+        border: 1px solid rgba(15, 23, 42, 0.10);
+        border-radius: 22px;
+        padding: 1.1rem 1.1rem 1rem 1.1rem;
+        box-shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
+        margin-top: 0.2rem;
+        margin-bottom: 1rem;
     }
 
-    s = styles.get(level, styles["warning"])
+    .sig-white-panel h2,
+    .sig-white-panel h3,
+    .sig-white-panel p,
+    .sig-white-panel span,
+    .sig-white-panel div,
+    .sig-white-panel label {
+        color: #0f172a !important;
+    }
 
-    html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <style>
-            body {{
-                margin: 0;
-                padding: 0;
-                background: transparent;
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            }}
-            .card {{
-                background: {s["bg"]};
-                border: 1px solid {s["border"]};
-                border-radius: 20px;
-                padding: 18px;
-                min-height: 250px;
-                box-sizing: border-box;
-                box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
-            }}
-            .asset {{
-                font-size: 1rem;
-                font-weight: 800;
-                color: #0f172a;
-                margin-bottom: 0.4rem;
-            }}
-            .ticker {{
-                font-size: 0.82rem;
-                color: #64748b;
-                margin-bottom: 0.8rem;
-            }}
-            .pill {{
-                display: inline-block;
-                padding: 6px 10px;
-                border-radius: 999px;
-                background: {s["pill_bg"]};
-                color: {s["pill_color"]};
-                font-size: 0.82rem;
-                font-weight: 800;
-                margin-bottom: 0.8rem;
-            }}
-            .subtitle {{
-                font-size: 0.82rem;
-                font-weight: 700;
-                color: #334155;
-                margin-top: 0.5rem;
-                margin-bottom: 0.2rem;
-            }}
-            .text {{
-                font-size: 0.82rem;
-                color: #334155;
-                line-height: 1.45;
-                margin-bottom: 0.4rem;
-            }}
-            .scores {{
-                display: flex;
-                gap: 10px;
-                margin-top: 0.6rem;
-                margin-bottom: 0.4rem;
-            }}
-            .score-box {{
-                flex: 1;
-                background: rgba(255,255,255,0.72);
-                border: 1px solid rgba(15, 23, 42, 0.06);
-                border-radius: 12px;
-                padding: 10px 12px;
-            }}
-            .score-label {{
-                font-size: 0.74rem;
-                color: #64748b;
-                margin-bottom: 0.15rem;
-            }}
-            .score-value {{
-                font-size: 1.05rem;
-                font-weight: 800;
-                color: #0f172a;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="card">
-            <div class="asset">{sanitize_text(asset_name)}</div>
-            <div class="ticker">{sanitize_text(ticker)}</div>
-            <div class="pill">{sanitize_text(recommendation)}</div>
+    .sig-white-panel .ui-divider {
+        background: rgba(15, 23, 42, 0.12) !important;
+    }
 
-            <div class="subtitle">Semáforo</div>
-            <div class="text"><strong>{sanitize_text(semaforo_estado)}</strong> · {sanitize_text(semaforo_msg)}</div>
+    .sig-white-panel div[data-testid="stDataFrame"] {
+        background: #ffffff !important;
+        border: 1px solid rgba(15, 23, 42, 0.10) !important;
+        border-radius: 14px !important;
+    }
 
-            <div class="scores">
-                <div class="score-box">
-                    <div class="score-label">Score compra</div>
-                    <div class="score-value">{score_buy}</div>
-                </div>
-                <div class="score-box">
-                    <div class="score-label">Score venta</div>
-                    <div class="score-value">{score_sell}</div>
-                </div>
-            </div>
+    .sig-summary-box {
+        background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+        border: 1px solid rgba(15, 23, 42, 0.10);
+        border-radius: 16px;
+        padding: 1rem;
+        margin-bottom: 0.9rem;
+        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+        color: #0f172a !important;
+    }
 
-            <div class="subtitle">Señales activas</div>
-            <div class="text">{sanitize_text(active_text)}</div>
-        </div>
-    </body>
-    </html>
-    """
-    components.html(html, height=290)
+    .sig-summary-box strong,
+    .sig-summary-box span,
+    .sig-summary-box div,
+    .sig-summary-box p {
+        color: #0f172a !important;
+    }
 
+    .sig-hint-box {
+        background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+        border: 1px solid rgba(59, 130, 246, 0.18);
+        border-radius: 18px;
+        padding: 1rem 1.05rem;
+        margin-top: 0.55rem;
+        margin-bottom: 0.9rem;
+        color: #0f172a !important;
+        box-shadow: 0 8px 22px rgba(15, 23, 42, 0.05);
+    }
 
-inject_ui_css()
+    .sig-hint-box strong,
+    .sig-hint-box span,
+    .sig-hint-box div,
+    .sig-hint-box p {
+        color: #0f172a !important;
+    }
+
+    .sig-mini-meta {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        padding: 0.48rem 0.8rem;
+        border-radius: 999px;
+        background: #ffffff;
+        border: 1px solid rgba(148, 163, 184, 0.30);
+        color: #334155 !important;
+        font-size: 0.84rem;
+        font-weight: 700;
+        margin-right: 0.45rem;
+        margin-bottom: 0.45rem;
+        box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04);
+    }
+
+    .sig-mini-meta strong,
+    .sig-mini-meta span,
+    .sig-mini-meta div {
+        color: #334155 !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 # ==============================
-# Helpers lógicos
+# HELPERS
 # ==============================
 def normalize_flags(flags: dict) -> dict:
     return {k: bool(v) for k, v in flags.items()}
@@ -243,131 +252,269 @@ def classify_signal_risk(signal: dict) -> dict:
         return {
             "estado": "Favorable",
             "ui": "positive",
-            "mensaje": (
-                "Predominan señales de fortaleza o entrada táctica de corto plazo."
-            ),
+            "mensaje": "Predominan señales de fortaleza o entrada táctica de corto plazo.",
         }
 
     if "venta" in recommendation or score_sell >= score_buy + 2:
         return {
             "estado": "Desfavorable",
             "ui": "danger",
-            "mensaje": (
-                "Predominan señales de deterioro técnico, agotamiento o presión bajista."
-            ),
+            "mensaje": "Predominan señales de deterioro técnico, agotamiento o presión bajista.",
         }
 
     if len(reasons) == 0 and score_buy == score_sell:
         return {
             "estado": "Neutral",
             "ui": "warning",
-            "mensaje": (
-                "No hay una ventaja técnica clara; el activo luce en zona de espera."
-            ),
+            "mensaje": "No hay una ventaja técnica clara; el activo luce en zona de espera.",
         }
 
     return {
         "estado": "Mixto / Precaución",
         "ui": "warning",
-        "mensaje": (
-            "Existen señales mixtas o poco concluyentes entre tendencia, momentum y reversión."
-        ),
+        "mensaje": "Existen señales mixtas o poco concluyentes entre tendencia, momentum y reversión.",
     }
 
 
+def render_signal_card(item: dict, modo_actual: str):
+    palettes = {
+        "positive": {
+            "bg": "linear-gradient(180deg, rgba(12,70,38,0.92) 0%, rgba(14,90,48,0.88) 100%)",
+            "border": "rgba(74, 222, 128, 0.30)",
+            "pill_bg": "rgba(255,255,255,0.16)",
+            "pill_color": "#ffffff",
+        },
+        "warning": {
+            "bg": "linear-gradient(180deg, rgba(97,63,13,0.92) 0%, rgba(120,78,18,0.88) 100%)",
+            "border": "rgba(245, 158, 11, 0.32)",
+            "pill_bg": "rgba(255,255,255,0.16)",
+            "pill_color": "#ffffff",
+        },
+        "danger": {
+            "bg": "linear-gradient(180deg, rgba(88,18,35,0.92) 0%, rgba(115,24,47,0.88) 100%)",
+            "border": "rgba(251, 113, 133, 0.32)",
+            "pill_bg": "rgba(255,255,255,0.16)",
+            "pill_color": "#ffffff",
+        },
+    }
+
+    style = palettes.get(item["ui"], palettes["warning"])
+    badge_text = f"Modo {modo_actual}"
+
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{
+                margin: 0;
+                padding: 0;
+                background: transparent;
+                font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            }}
+
+            .sig-card {{
+                background: {style["bg"]};
+                border: 1px solid {style["border"]};
+                border-radius: 20px;
+                padding: 16px 16px 14px 16px;
+                min-height: 290px;
+                box-sizing: border-box;
+                box-shadow: 0 12px 28px rgba(0,0,0,0.18);
+            }}
+
+            .top {{
+                display: flex;
+                align-items: flex-start;
+                justify-content: space-between;
+                gap: 12px;
+                margin-bottom: 8px;
+            }}
+
+            .asset {{
+                font-size: 1rem;
+                font-weight: 800;
+                color: #ffffff;
+                margin-bottom: 4px;
+            }}
+
+            .ticker {{
+                font-size: 0.80rem;
+                color: rgba(255,255,255,0.78);
+            }}
+
+            .mode-badge {{
+                display: inline-flex;
+                align-items: center;
+                padding: 6px 10px;
+                border-radius: 999px;
+                background: rgba(255,255,255,0.14);
+                border: 1px solid rgba(255,255,255,0.18);
+                color: #ffffff;
+                font-size: 0.74rem;
+                font-weight: 800;
+                white-space: nowrap;
+            }}
+
+            .pill {{
+                display: inline-flex;
+                align-items: center;
+                padding: 6px 10px;
+                border-radius: 999px;
+                background: {style["pill_bg"]};
+                color: {style["pill_color"]};
+                border: 1px solid rgba(255,255,255,0.16);
+                font-size: 0.80rem;
+                font-weight: 800;
+                margin-bottom: 10px;
+            }}
+
+            .subtitle {{
+                font-size: 0.78rem;
+                color: rgba(255,255,255,0.72);
+                font-weight: 800;
+                text-transform: uppercase;
+                letter-spacing: 0.03em;
+                margin-bottom: 4px;
+                margin-top: 8px;
+            }}
+
+            .text {{
+                font-size: 0.87rem;
+                color: #ffffff;
+                line-height: 1.46;
+                margin-bottom: 8px;
+            }}
+
+            .scores {{
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 10px;
+                margin-top: 8px;
+                margin-bottom: 8px;
+            }}
+
+            .score-box {{
+                background: rgba(255,255,255,0.10);
+                border: 1px solid rgba(255,255,255,0.14);
+                border-radius: 14px;
+                padding: 10px 12px;
+            }}
+
+            .score-label {{
+                font-size: 0.74rem;
+                color: rgba(255,255,255,0.70);
+                margin-bottom: 2px;
+            }}
+
+            .score-value {{
+                font-size: 1.08rem;
+                font-weight: 800;
+                color: #ffffff;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="sig-card">
+            <div class="top">
+                <div>
+                    <div class="asset">{item['asset_name']}</div>
+                    <div class="ticker">{item['ticker']}</div>
+                </div>
+                <div class="mode-badge">{badge_text}</div>
+            </div>
+
+            <div class="pill">{item['recommendation']}</div>
+
+            <div class="subtitle">Semáforo</div>
+            <div class="text"><strong>{item['semaforo_estado']}</strong> · {item['semaforo_msg']}</div>
+
+            <div class="scores">
+                <div class="score-box">
+                    <div class="score-label">Score compra</div>
+                    <div class="score-value">{item['score_buy']}</div>
+                </div>
+                <div class="score-box">
+                    <div class="score-label">Score venta</div>
+                    <div class="score-value">{item['score_sell']}</div>
+                </div>
+            </div>
+
+            <div class="subtitle">Señales activas</div>
+            <div class="text">{item['active_text']}</div>
+        </div>
+    </body>
+    </html>
+    """
+    components.html(html, height=330)
+
+
 # ==============================
-# Sidebar
+# HEADER
 # ==============================
-with st.sidebar:
-    st.header("Parámetros")
-
-    horizonte = st.selectbox(
-        "Horizonte de análisis",
-        [
-            "1 mes",
-            "Trimestre",
-            "Semestre",
-            "1 año",
-            "3 años",
-            "5 años",
-            "Personalizado",
-        ],
-        index=3,
-    )
-
-    fecha_fin_ref = pd.to_datetime(DEFAULT_END_DATE)
-
-    if horizonte == "1 mes":
-        start_date = (fecha_fin_ref - pd.DateOffset(months=1)).date()
-        end_date = fecha_fin_ref.date()
-    elif horizonte == "Trimestre":
-        start_date = (fecha_fin_ref - pd.DateOffset(months=3)).date()
-        end_date = fecha_fin_ref.date()
-    elif horizonte == "Semestre":
-        start_date = (fecha_fin_ref - pd.DateOffset(months=6)).date()
-        end_date = fecha_fin_ref.date()
-    elif horizonte == "1 año":
-        start_date = (fecha_fin_ref - pd.DateOffset(years=1)).date()
-        end_date = fecha_fin_ref.date()
-    elif horizonte == "3 años":
-        start_date = (fecha_fin_ref - pd.DateOffset(years=3)).date()
-        end_date = fecha_fin_ref.date()
-    elif horizonte == "5 años":
-        start_date = (fecha_fin_ref - pd.DateOffset(years=5)).date()
-        end_date = fecha_fin_ref.date()
-    else:
-        start_date = st.date_input("Fecha inicial", value=DEFAULT_START_DATE, key="sig_start")
-        end_date = st.date_input("Fecha final", value=DEFAULT_END_DATE, key="sig_end")
-
-    st.divider()
-    st.subheader("Modo de visualización")
-    modo = st.radio(
-        "Selecciona el nivel de detalle",
-        ["General", "Estadístico"],
-        index=0,
-    )
-
-    st.divider()
-    st.subheader("Opciones de visualización")
-    mostrar_detalle = st.checkbox("Mostrar detalle por activo", value=False)
-
-    with st.expander("Filtros secundarios"):
-        rsi_overbought = st.slider("RSI sobrecompra", min_value=60, max_value=90, value=70)
-        rsi_oversold = st.slider("RSI sobreventa", min_value=10, max_value=40, value=30)
-        stoch_overbought = st.slider("Estocástico sobrecompra", min_value=60, max_value=95, value=80)
-        stoch_oversold = st.slider("Estocástico sobreventa", min_value=5, max_value=40, value=20)
-
-
-# ==============================
-# Introducción
-# ==============================
-section_intro(
-    "Cómo leer este módulo",
-    "Cada activo se resume en una tarjeta con recomendación, semáforo técnico, score de compra/venta y señales activas más relevantes.",
+header_dashboard(
+    "Módulo 7 - Señales y alertas",
+    "Resume señales técnicas por activo y las traduce en una lectura operativa más clara",
+    modo=modo,
 )
 
 if modo == "General":
-    st.info(
-        """
-        **Semáforo interpretativo**
-        - **Favorable**: predominan señales de entrada o fortaleza técnica.
-        - **Neutral / Precaución**: señales mixtas o sin ventaja clara.
-        - **Desfavorable**: predominan señales de venta, agotamiento o deterioro técnico.
-
-        Estas señales orientan la lectura táctica, pero no reemplazan el análisis de riesgo, benchmark ni contexto macro.
-        """
+    nota(
+        "Este módulo resume señales técnicas por activo y las convierte en una lectura táctica rápida para apoyar la interpretación del portafolio."
     )
 else:
-    st.info(
-        """
-        Este módulo sintetiza señales provenientes de MACD, RSI, Bandas de Bollinger, cruces de medias y oscilador estocástico.
-        La recomendación final agrega evidencia de tendencia, reversión y momentum para construir una lectura técnica por activo.
-        """
+    nota(
+        "En modo estadístico, este bloque sintetiza señales provenientes de tendencia, reversión y momentum para priorización táctica de activos."
     )
 
 
 # ==============================
-# Construcción de tarjetas
+# INTRODUCCIÓN
+# ==============================
+seccion("Resumen Del Módulo")
+
+if modo == "General":
+    nota(
+        "Cada activo se resume en una tarjeta con recomendación, semáforo técnico, score de compra/venta y señales activas más relevantes."
+    )
+else:
+    nota(
+        "La recomendación final agrega evidencia de MACD, RSI, Bollinger, cruces de medias y oscilador estocástico para construir una lectura técnica por activo."
+    )
+
+st.markdown(
+    f"""
+    <div class="sig-hint-box">
+        <strong>Interpretación del horizonte:</strong>
+        el horizonte modifica la cantidad de historia usada para calcular los indicadores,
+        pero la señal final reportada corresponde a la <strong>última fecha disponible</strong>
+        dentro de la ventana seleccionada ({start_date} a {end_date}).
+        Por eso, al cambiar el horizonte, algunas señales pueden mantenerse iguales si el tramo final del activo no cambia de forma relevante.
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+meta_1, meta_2, meta_3 = st.columns(3)
+with meta_1:
+    st.markdown(
+        f'<div class="sig-mini-meta"><strong>Horizonte:</strong>&nbsp;{horizonte}</div>',
+        unsafe_allow_html=True,
+    )
+with meta_2:
+    st.markdown(
+        f'<div class="sig-mini-meta"><strong>Inicio:</strong>&nbsp;{start_date}</div>',
+        unsafe_allow_html=True,
+    )
+with meta_3:
+    st.markdown(
+        f'<div class="sig-mini-meta"><strong>Fin:</strong>&nbsp;{end_date}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ==============================
+# CONSTRUCCIÓN DE TARJETAS
 # ==============================
 cards_data = []
 
@@ -413,79 +560,152 @@ if not cards_data:
     st.warning("No fue posible construir señales para los activos en la ventana seleccionada.")
     st.stop()
 
-
-# ==============================
-# Grid 2 columnas
-# ==============================
-st.markdown("### Lectura por activo")
-
-for i in range(0, len(cards_data), 2):
-    cols = st.columns(2)
-    row_items = cards_data[i:i + 2]
-
-    for col, item in zip(cols, row_items):
-        with col:
-            signal_card(
-                asset_name=item["asset_name"],
-                ticker=item["ticker"],
-                recommendation=item["recommendation"],
-                semaforo_estado=item["semaforo_estado"],
-                semaforo_msg=item["semaforo_msg"],
-                score_buy=item["score_buy"],
-                score_sell=item["score_sell"],
-                active_text=item["active_text"],
-                level=item["ui"],
-            )
-
-            if mostrar_detalle or modo == "Estadístico":
-                with st.expander(f"Ver detalle de señales - {item['asset_name']}"):
-                    st.dataframe(
-                        signal_table(item["flags"]),
-                        width="stretch",
-                        hide_index=True,
-                    )
-
-
-# ==============================
-# Interpretación breve final
-# ==============================
 favorables = sum(1 for x in cards_data if x["semaforo_estado"] == "Favorable")
 desfavorables = sum(1 for x in cards_data if x["semaforo_estado"] == "Desfavorable")
 mixtas = len(cards_data) - favorables - desfavorables
 
-st.markdown("### Interpretación breve")
 
-if modo == "General":
-    if favorables > desfavorables:
-        st.success(
-            f"""
-            En esta ventana predominan señales **favorables** ({favorables} activos), por lo que la lectura técnica agregada
-            sugiere un sesgo más constructivo que defensivo. Aun así, la decisión no debería basarse solo en este módulo:
-            conviene contrastar estas señales con riesgo, benchmark y contexto macro.
-            """
-        )
-    elif desfavorables > favorables:
-        st.error(
-            f"""
-            En esta ventana predominan señales **desfavorables** ({desfavorables} activos), lo que sugiere mayor cautela
-            táctica. Esto puede reflejar sobrecompra, pérdida de momentum o deterioro técnico en varios activos del portafolio.
-            """
+# ==============================
+# KPIS
+# ==============================
+seccion("KPIs Del Módulo")
+
+k1, k2, k3, k4 = st.columns(4)
+
+with k1:
+    tarjeta_kpi(
+        "Activos evaluados",
+        str(len(cards_data)),
+        help_text="Número de activos con señales válidas en la ventana analizada.",
+    )
+
+with k2:
+    tarjeta_kpi(
+        "Favorables",
+        str(favorables),
+        help_text="Activos donde predominan señales de compra o fortaleza.",
+    )
+
+with k3:
+    tarjeta_kpi(
+        "Desfavorables",
+        str(desfavorables),
+        help_text="Activos donde predominan señales de venta o deterioro técnico.",
+    )
+
+with k4:
+    tarjeta_kpi(
+        "Mixtos / neutrales",
+        str(mixtas),
+        help_text="Activos sin una ventaja técnica clara o con evidencia cruzada.",
+    )
+
+plot_card_footer(
+    f"En la ventana analizada se identifican {favorables} activos favorables, {desfavorables} desfavorables y {mixtas} con lectura intermedia o no concluyente."
+)
+
+
+# ==============================
+# TABS
+# ==============================
+tabs = st.tabs(
+    [
+        "Lectura por activo",
+        "Detalle técnico",
+        "Interpretación final",
+    ]
+)
+tab1, tab2, tab3 = tabs
+
+
+# ==============================
+# TAB 1
+# ==============================
+with tab1:
+    st.markdown('<div class="sig-white-panel">', unsafe_allow_html=True)
+
+    seccion("Lectura Por Activo")
+
+    for i in range(0, len(cards_data), 2):
+        cols = st.columns(2)
+        row_items = cards_data[i:i + 2]
+
+        for col, item in zip(cols, row_items):
+            with col:
+                render_signal_card(item, modo)
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ==============================
+# TAB 2
+# ==============================
+with tab2:
+    st.markdown('<div class="sig-white-panel">', unsafe_allow_html=True)
+
+    seccion("Detalle Técnico Por Activo")
+
+    if not mostrar_detalle:
+        nota(
+            "Activa la opción 'Mostrar detalle por activo' en la barra lateral si deseas desplegar el detalle completo de señales para cada activo."
         )
     else:
-        st.warning(
-            f"""
-            La lectura agregada es **mixta**: hay señales favorables, desfavorables y neutrales coexistiendo. En este caso,
-            el módulo sugiere prudencia y selección más cuidadosa por activo en vez de una lectura uniforme del portafolio.
-            """
-        )
-else:
-    st.info(
-        f"""
-        Desde una perspectiva agregada, el módulo identifica **{favorables} activos con lectura favorable**, 
-        **{desfavorables} con lectura desfavorable** y **{mixtas} con lectura intermedia o no concluyente**.
+        for item in cards_data:
+            with st.expander(f"Ver detalle de señales - {item['asset_name']}"):
+                c1, c2 = st.columns([1, 1.2])
 
-        En términos técnicos, esto sugiere que las señales derivadas de momentum, reversión y tendencia no son homogéneas
-        en todo el universo analizado. Por tanto, la interpretación más adecuada es utilizar este bloque como apoyo
-        táctico para priorización de activos, no como criterio aislado de asignación.
-        """
+                with c1:
+                    st.markdown(
+                        f"""
+                        <div class="sig-summary-box">
+                            <strong>Recomendación:</strong> {item['recommendation']}<br><br>
+                            <strong>Semáforo:</strong> {item['semaforo_estado']}<br><br>
+                            <strong>Score compra:</strong> {item['score_buy']}<br>
+                            <strong>Score venta:</strong> {item['score_sell']}<br><br>
+                            <strong>Señales activas:</strong> {item['active_text']}
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+                with c2:
+                    st.dataframe(
+                        signal_table(item["flags"]),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ==============================
+# TAB 3
+# ==============================
+with tab3:
+    st.markdown('<div class="sig-white-panel">', unsafe_allow_html=True)
+
+    seccion("Interpretación Final")
+
+    if modo == "General":
+        if favorables > desfavorables:
+            nota(
+                f"En esta ventana predominan señales favorables ({favorables} activos), por lo que la lectura técnica agregada sugiere un sesgo más constructivo que defensivo. Aun así, conviene contrastar estas señales con riesgo, benchmark y contexto macro."
+            )
+        elif desfavorables > favorables:
+            nota(
+                f"En esta ventana predominan señales desfavorables ({desfavorables} activos), lo que sugiere mayor cautela táctica. Esto puede reflejar sobrecompra, pérdida de momentum o deterioro técnico en varios activos del portafolio."
+            )
+        else:
+            nota(
+                "La lectura agregada es mixta: hay señales favorables, desfavorables y neutrales coexistiendo. En este caso, el módulo sugiere prudencia y selección más cuidadosa por activo en vez de una lectura uniforme del portafolio."
+            )
+    else:
+        nota(
+            f"Desde una perspectiva agregada, el módulo identifica {favorables} activos con lectura favorable, {desfavorables} con lectura desfavorable y {mixtas} con lectura intermedia o no concluyente. Esto sugiere que las señales derivadas de momentum, reversión y tendencia no son homogéneas en todo el universo analizado y deben usarse como apoyo táctico, no como criterio aislado de asignación."
+        )
+
+    nota(
+        "Metodológicamente, este módulo debe leerse como una fotografía técnica al cierre de la ventana seleccionada. El horizonte no redefine por sí mismo la fecha de evaluación; redefine la muestra histórica usada para calcular indicadores."
     )
+
+    st.markdown("</div>", unsafe_allow_html=True)

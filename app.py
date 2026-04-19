@@ -1,10 +1,18 @@
 import streamlit as st
 import pandas as pd
-import streamlit.components.v1 as components
+
+from ui.page_setup import setup_dashboard_page
+from ui.dashboard_ui import (
+    header_dashboard,
+    seccion,
+    nota,
+    tarjeta_kpi,
+    plot_card_header,
+    plot_card_footer,
+)
 
 from src.config import (
     APP_TITLE,
-    APP_SUBTITLE,
     ASSET_TICKERS,
     DEFAULT_END_DATE,
     DEFAULT_START_DATE,
@@ -27,37 +35,66 @@ ensure_project_dirs()
 
 st.set_page_config(
     page_title=APP_TITLE,
-    page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 
 # ---------------------------------------------------------
-# UI helpers
+# Estilos locales de portada
 # ---------------------------------------------------------
-def inject_ui_css():
+def inject_home_css():
     st.markdown(
         """
         <style>
-        .section-box {
-            background: #ffffff;
-            border: 1px solid rgba(15, 23, 42, 0.08);
+        .home-info-card {
+            background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+            border: 1px solid rgba(148, 163, 184, 0.20);
             border-radius: 18px;
-            padding: 16px 18px;
-            box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
-            margin-bottom: 0.8rem;
+            padding: 1rem 1.05rem;
+            box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+            min-height: 124px;
         }
-        .section-title {
-            font-size: 1rem;
+
+        .home-info-label {
+            font-size: 0.78rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            font-weight: 900;
+            color: #64748B !important;
+            margin-bottom: 0.4rem;
+        }
+
+        .home-info-value {
+            font-size: 0.98rem;
             font-weight: 700;
-            color: #0f172a;
-            margin-bottom: 0.2rem;
+            color: #0F172A !important;
+            line-height: 1.55;
+            word-break: break-word;
         }
-        .section-subtitle {
-            font-size: 0.86rem;
-            color: #64748b;
-            line-height: 1.45;
+
+        .home-module-card {
+            background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+            border: 1px solid rgba(148, 163, 184, 0.20);
+            border-radius: 18px;
+            padding: 0.95rem 1rem;
+            box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+            margin-bottom: 0.75rem;
+            min-height: 112px;
+        }
+
+        .home-module-title {
+            font-size: 0.96rem;
+            font-weight: 900;
+            color: #0F172A !important;
+            margin-bottom: 0.28rem;
+            line-height: 1.3;
+        }
+
+        .home-module-desc {
+            font-size: 0.90rem;
+            color: #334155 !important;
+            line-height: 1.55;
         }
         </style>
         """,
@@ -65,124 +102,31 @@ def inject_ui_css():
     )
 
 
-def section_intro(title: str, subtitle: str):
+def info_card(label: str, value: str):
     st.markdown(
         f"""
-        <div class="section-box">
-            <div class="section-title">{title}</div>
-            <div class="section-subtitle">{subtitle}</div>
+        <div class="home-info-card">
+            <div class="home-info-label">{label}</div>
+            <div class="home-info-value">{value}</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
 
-def sanitize_text(text):
-    if text is None:
-        return ""
-    return str(text).replace("<", "").replace(">", "")
-
-
-def kpi_card(title, value, delta=None, delta_type="neu", caption=""):
-    title = sanitize_text(title)
-    value = sanitize_text(value)
-    delta = sanitize_text(delta) if delta is not None else ""
-    caption = sanitize_text(caption)
-
-    delta_html = ""
-    if delta:
-        delta_html = f'<div class="kpi-delta {delta_type}">{delta}</div>'
-
-    html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <style>
-            body {{
-                margin: 0;
-                padding: 0;
-                background: transparent;
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            }}
-
-            .kpi-card {{
-                background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-                border: 1px solid rgba(15, 23, 42, 0.08);
-                border-radius: 18px;
-                padding: 18px 18px 14px 18px;
-                box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
-                min-height: 126px;
-                box-sizing: border-box;
-                display: flex;
-                flex-direction: column;
-                justify-content: space-between;
-            }}
-
-            .kpi-label {{
-                font-size: 0.88rem;
-                font-weight: 600;
-                color: #475569;
-                margin-bottom: 0.35rem;
-            }}
-
-            .kpi-value {{
-                font-size: 1.85rem;
-                font-weight: 800;
-                color: #0f172a;
-                line-height: 1.1;
-                margin-bottom: 0.45rem;
-                word-break: break-word;
-            }}
-
-            .kpi-delta {{
-                display: inline-block;
-                width: fit-content;
-                font-size: 0.80rem;
-                font-weight: 700;
-                padding: 0.28rem 0.55rem;
-                border-radius: 999px;
-                margin-top: 0.10rem;
-            }}
-
-            .kpi-delta.pos {{
-                background-color: rgba(22, 163, 74, 0.10);
-                color: #15803d;
-            }}
-
-            .kpi-delta.neg {{
-                background-color: rgba(220, 38, 38, 0.10);
-                color: #b91c1c;
-            }}
-
-            .kpi-delta.neu {{
-                background-color: rgba(100, 116, 139, 0.12);
-                color: #475569;
-            }}
-
-            .kpi-caption {{
-                font-size: 0.78rem;
-                color: #64748b;
-                margin-top: 0.65rem;
-                line-height: 1.35;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="kpi-card">
-            <div>
-                <div class="kpi-label">{title}</div>
-                <div class="kpi-value">{value}</div>
-                {delta_html}
-            </div>
-            <div class="kpi-caption">{caption}</div>
+def module_card(title: str, desc: str):
+    st.markdown(
+        f"""
+        <div class="home-module-card">
+            <div class="home-module-title">{title}</div>
+            <div class="home-module-desc">{desc}</div>
         </div>
-    </body>
-    </html>
-    """
-    components.html(html, height=150)
+        """,
+        unsafe_allow_html=True,
+    )
 
 
-inject_ui_css()
+inject_home_css()
 
 
 # ---------------------------------------------------------
@@ -194,13 +138,23 @@ def get_market_data(tickers, start, end):
 
 
 # ---------------------------------------------------------
-# Sidebar
+# Setup global UI
 # ---------------------------------------------------------
+modo, filtros_sidebar = setup_dashboard_page(
+    title="Dashboard Riesgo",
+    subtitle="Universidad Santo Tomás",
+    modo_default="General",
+    filtros_label="Configuración General",
+    filtros_expanded=False,
+)
+
 all_tickers = list(ASSET_TICKERS.values())
 
-with st.sidebar:
-    st.header("Configuración general")
 
+# ---------------------------------------------------------
+# Sidebar
+# ---------------------------------------------------------
+with filtros_sidebar:
     horizonte = st.selectbox(
         "Horizonte de análisis",
         [
@@ -213,6 +167,7 @@ with st.sidebar:
             "Personalizado",
         ],
         index=3,
+        key="app_horizonte",
     )
 
     fecha_fin_ref = pd.to_datetime(DEFAULT_END_DATE)
@@ -236,36 +191,22 @@ with st.sidebar:
         start_date = (fecha_fin_ref - pd.DateOffset(years=5)).date()
         end_date = fecha_fin_ref.date()
     else:
-        start_date = st.date_input("Fecha inicial", value=DEFAULT_START_DATE)
-        end_date = st.date_input("Fecha final", value=DEFAULT_END_DATE)
+        c1, c2 = st.columns(2)
+        with c1:
+            start_date = st.date_input("Fecha inicial", value=DEFAULT_START_DATE, key="app_start")
+        with c2:
+            end_date = st.date_input("Fecha final", value=DEFAULT_END_DATE, key="app_end")
 
-    st.divider()
-    st.subheader("Modo de visualización")
-    modo = st.radio(
-        "Selecciona el nivel de detalle",
-        ["General", "Estadístico"],
-        index=0,
+    selected_tickers = st.multiselect(
+        "Selecciona activos",
+        options=all_tickers,
+        default=all_tickers[: min(5, len(all_tickers))],
+        help="Escoge uno o varios activos para construir el análisis.",
+        key="app_selected_tickers",
     )
 
-    st.divider()
-    st.subheader("Opciones de visualización")
-    mostrar_tablas = st.checkbox("Mostrar tablas completas", value=False)
-
-    with st.expander("Filtros secundarios"):
-        selected_tickers = st.multiselect(
-            "Selecciona activos",
-            options=all_tickers,
-            default=all_tickers[: min(4, len(all_tickers))],
-            help="Escoge uno o varios activos para construir el análisis.",
-        )
-
-        mostrar_estructura = st.checkbox("Mostrar estructura del dashboard", value=True)
-        mostrar_ultimos_precios = st.checkbox("Mostrar últimos precios", value=True)
-
-    st.divider()
-    st.info(
-        "La navegación entre módulos se realiza desde la barra lateral de Streamlit usando la carpeta `pages/`."
-    )
+    mostrar_estructura = st.checkbox("Mostrar estructura del dashboard", value=True, key="app_show_structure")
+    mostrar_ultimos_precios = st.checkbox("Mostrar últimos precios", value=True, key="app_show_prices")
 
 
 # ---------------------------------------------------------
@@ -281,29 +222,57 @@ if not selected_tickers:
 
 
 # ---------------------------------------------------------
-# Encabezado principal
+# Header principal
 # ---------------------------------------------------------
-st.title(APP_TITLE)
-st.caption(APP_SUBTITLE)
+header_dashboard(
+    "RiskLab USTA - Dashboard de Riesgo Financiero",
+    "Proyecto integrador con APIs, análisis técnico, VaR, GARCH, CAPM, Markowitz, señales y benchmark.",
+    modo=modo,
+)
 
 if modo == "General":
-    st.markdown(
-        """
-        Dashboard de análisis financiero enfocado en gestión del riesgo y portafolios.
-        Integra módulos de análisis técnico, rendimientos, volatilidad, CAPM, VaR/CVaR,
-        optimización de Markowitz, señales y benchmark.
-        """
+    nota(
+        "Panel de entrada al dashboard. Resume el universo de activos, el periodo de análisis y el comportamiento base del portafolio equiponderado."
     )
 else:
-    st.markdown(
-        """
-        Panel principal de síntesis para el proyecto integrador. Resume la estructura del portafolio,
-        el comportamiento agregado de precios normalizados y métricas básicas del portafolio equiponderado
-        como punto de entrada al resto de módulos cuantitativos y de decisión.
-        """
+    nota(
+        "Síntesis del universo de análisis y caracterización inicial del portafolio equiponderado como referencia para los módulos cuantitativos."
     )
 
-st.caption(f"Periodo analizado: {start_date} a {end_date}")
+
+# ---------------------------------------------------------
+# Configuración activa
+# ---------------------------------------------------------
+seccion("Configuración Activa")
+
+cfg1, cfg2, cfg3 = st.columns([2.4, 1.1, 1.1])
+
+with cfg1:
+    st.markdown(
+        f"""
+        <div class="home-info-card">
+            <div class="home-info-label">Activos y período</div>
+            <div class="home-info-value">
+                <strong>Activos:</strong> {" • ".join(selected_tickers)}<br><br>
+                <strong>Período:</strong> {start_date} → {end_date}<br>
+                <span style="color:#64748B; font-size:0.85rem;">Horizonte: {horizonte}</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+with cfg2:
+    info_card(
+        "Benchmark global",
+        GLOBAL_BENCHMARK,
+    )
+
+with cfg3:
+    info_card(
+        "Modo activo",
+        modo,
+    )
 
 
 # ---------------------------------------------------------
@@ -342,184 +311,118 @@ portfolio_returns = equal_weight_portfolio(returns)
 
 ann_return = annualize_return(portfolio_returns)
 ann_vol = annualize_volatility(portfolio_returns)
+
 obs_count = int(close_prices.shape[0])
 asset_count = len(selected_tickers)
 
 ret_delta = "Sesgo positivo" if ann_return > 0 else "Sesgo negativo" if ann_return < 0 else "Sin sesgo"
-ret_delta_type = "pos" if ann_return > 0 else "neg" if ann_return < 0 else "neu"
-
 vol_delta = "Mayor dispersión" if ann_vol > 0.20 else "Dispersión moderada"
-vol_delta_type = "neg" if ann_vol > 0.20 else "neu"
 
 
 # ---------------------------------------------------------
-# Resumen ejecutivo
+# KPIs
 # ---------------------------------------------------------
-st.markdown("### Resumen ejecutivo")
-section_intro(
-    "Lectura general del dashboard",
-    "Este bloque resume los activos seleccionados, la ventana temporal analizada y el comportamiento agregado del portafolio equiponderado.",
-)
+seccion("KPIs Del Portafolio")
 
-info_col1, info_col2 = st.columns([2, 1])
+k1, k2, k3, k4 = st.columns(4)
 
-with info_col1:
-    st.markdown(
-        f"""
-        **Activos seleccionados:** {', '.join(selected_tickers)}  
-        **Periodo analizado:** {start_date} → {end_date}
-        """
-    )
-
-with info_col2:
-    st.markdown(f"**Benchmark global:** {GLOBAL_BENCHMARK}")
-
-
-# ---------------------------------------------------------
-# Métricas principales
-# ---------------------------------------------------------
-st.markdown("### KPIs del portafolio")
-
-metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
-
-with metric_col1:
-    kpi_card(
-        "Número de activos",
+with k1:
+    tarjeta_kpi(
+        "Activos",
         str(asset_count),
-        caption="Activos incluidos en el análisis",
+        help_text="Cantidad de activos incluidos actualmente en el análisis.",
+        subtexto="Universo usado para construir el portafolio equiponderado.",
     )
 
-with metric_col2:
-    kpi_card(
+with k2:
+    tarjeta_kpi(
         "Observaciones",
         str(obs_count),
-        caption="Número de precios disponibles en la muestra",
+        help_text="Número de precios disponibles en la muestra descargada.",
+        subtexto="Base temporal utilizada para retornos y visualización.",
     )
 
-with metric_col3:
-    kpi_card(
-        "Rendimiento anualizado",
+with k3:
+    tarjeta_kpi(
+        "Retorno anualizado",
         f"{ann_return:.2%}",
         delta=ret_delta,
-        delta_type=ret_delta_type,
-        caption="Retorno estimado del portafolio equiponderado",
+        help_text="Retorno estimado del portafolio equiponderado.",
+        subtexto="Medida agregada de crecimiento esperado bajo anualización.",
     )
 
-with metric_col4:
-    kpi_card(
+with k4:
+    tarjeta_kpi(
         "Volatilidad anualizada",
         f"{ann_vol:.2%}",
         delta=vol_delta,
-        delta_type=vol_delta_type,
-        caption="Riesgo agregado estimado del portafolio",
+        help_text="Riesgo agregado estimado del portafolio.",
+        subtexto="Dispersión anualizada de los rendimientos del portafolio.",
     )
 
 
 # ---------------------------------------------------------
-# Gráfico principal
+# Gráfico + resumen juntos
 # ---------------------------------------------------------
-st.markdown("### Precios normalizados (base 100)")
-section_intro(
-    "Evolución comparativa de los activos",
-    "El gráfico permite comparar visualmente la trayectoria relativa de precios desde una base común.",
-)
+seccion("Vista General Del Portafolio")
 
-fig_norm = plot_normalized_prices(close_prices)
-st.plotly_chart(fig_norm, width="stretch")
+left_col, right_col = st.columns([1.7, 1], gap="large")
 
-if modo == "General":
-    st.info(
-        """
-        **Cómo interpretar este gráfico**
-        - Todos los activos comienzan en una base comparable de 100.
-        - Si una serie sube más que otra, su desempeño relativo fue mejor en la ventana elegida.
-        - La separación entre curvas permite identificar activos más estables, más volátiles o más rentables.
-        """
-    )
-else:
-    st.info(
-        """
-        El gráfico de precios normalizados permite contrastar trayectorias relativas sin sesgo por nivel de precio inicial.
-        Es útil para identificar divergencias de desempeño, episodios de mayor volatilidad relativa y cambios en la dispersión del conjunto analizado.
-        """
+with left_col:
+    plot_card_header(
+        "Precios normalizados (base 100)",
+        "Comparación relativa del desempeño de los activos desde una base común.",
+        modo=modo,
+        caption="Permite identificar rápidamente qué activos tuvieron mejor trayectoria relativa en el periodo.",
     )
 
+    fig = plot_normalized_prices(close_prices)
+    st.plotly_chart(fig, use_container_width=True)
 
-# ---------------------------------------------------------
-# Resumen del portafolio
-# ---------------------------------------------------------
-st.markdown("### Resumen rápido del portafolio equiponderado")
-section_intro(
-    "Métricas descriptivas del portafolio",
-    "Este resumen concentra medidas básicas que ayudan a caracterizar retorno medio y dispersión del portafolio construido con pesos iguales.",
-)
+    plot_card_footer(
+        "Todos los activos parten de una base comparable, lo que facilita contrastar trayectorias y desempeño relativo."
+    )
 
-summary = pd.DataFrame(
-    {
-        "Métrica": [
-            "Rendimiento anualizado",
-            "Volatilidad anualizada",
-            "Promedio diario",
-            "Desviación estándar diaria",
-        ],
-        "Valor": [
-            f"{ann_return:.2%}",
-            f"{ann_vol:.2%}",
-            f"{portfolio_returns.mean():.4%}",
-            f"{portfolio_returns.std(ddof=1):.4%}",
-        ],
-    }
-)
+with right_col:
+    plot_card_header(
+        "Resumen del portafolio equiponderado",
+        "Métricas descriptivas básicas del portafolio construido con pesos iguales.",
+        modo=modo,
+        caption="Complementa la lectura visual del gráfico con medidas agregadas.",
+    )
 
-if mostrar_tablas:
-    st.dataframe(summary, width="stretch", hide_index=True)
-else:
-    with st.expander("Ver resumen estadístico"):
-        st.dataframe(summary, width="stretch", hide_index=True)
+    summary = pd.DataFrame(
+        {
+            "Métrica": [
+                "Retorno anualizado",
+                "Volatilidad anualizada",
+                "Promedio diario",
+                "Desviación estándar diaria",
+            ],
+            "Valor": [
+                f"{ann_return:.2%}",
+                f"{ann_vol:.2%}",
+                f"{portfolio_returns.mean():.4%}",
+                f"{portfolio_returns.std(ddof=1):.4%}",
+            ],
+        }
+    )
+
+    st.dataframe(summary, use_container_width=True, hide_index=True)
+
+    plot_card_footer(
+        "Este resumen concentra las medidas más útiles para una primera lectura del perfil riesgo-retorno."
+    )
 
 
 # ---------------------------------------------------------
 # Últimos precios
 # ---------------------------------------------------------
 if mostrar_ultimos_precios:
-    st.markdown("### Últimos precios disponibles")
-    if mostrar_tablas:
-        st.dataframe(
-            close_prices.tail(10).style.format("{:.2f}"),
-            width="stretch",
-        )
-    else:
-        with st.expander("Ver últimos precios"):
-            st.dataframe(
-                close_prices.tail(10).style.format("{:.2f}"),
-                width="stretch",
-            )
-
-
-# ---------------------------------------------------------
-# Interpretación
-# ---------------------------------------------------------
-st.markdown("### Interpretación general")
-
-if modo == "General":
-    st.success(
-        """
-        **Lectura sencilla**
-
-        - Esta página sirve como puerta de entrada al dashboard.
-        - Resume rápidamente qué activos están siendo analizados, cómo evolucionaron sus precios y cuál fue el comportamiento básico del portafolio equiponderado.
-        - A partir de aquí, los demás módulos profundizan en técnica, rendimientos, riesgo, CAPM, optimización y decisión.
-        """
-    )
-else:
-    st.info(
-        """
-        **Lectura técnica**
-
-        - La portada resume el universo de análisis y ofrece una primera caracterización del portafolio equiponderado.
-        - El rendimiento anualizado y la volatilidad anualizada permiten una lectura preliminar del perfil riesgo-retorno.
-        - El gráfico base 100 sirve como referencia visual para contrastar desempeño relativo antes de entrar a los módulos especializados.
-        """
+    seccion("Últimos Precios Disponibles")
+    st.dataframe(
+        close_prices.tail(10).style.format("{:.2f}"),
+        use_container_width=True,
     )
 
 
@@ -527,18 +430,50 @@ else:
 # Estructura del dashboard
 # ---------------------------------------------------------
 if mostrar_estructura:
-    st.markdown("### Estructura del dashboard")
-    st.markdown(
-        """
-        - **00 Contextualización:** lectura cualitativa y rol de los activos en el portafolio.
-        - **01 Técnico:** indicadores y gráficos por activo.
-        - **02 Rendimientos:** estadística descriptiva y pruebas de normalidad.
-        - **03 GARCH:** comparación de modelos de volatilidad.
-        - **04 CAPM:** beta, CAPM y benchmark local.
-        - **05 VaR/CVaR:** riesgo del portafolio con 3 métodos.
-        - **06 Markowitz:** frontera eficiente y portafolios óptimos.
-        - **07 Señales:** alertas automáticas de trading.
-        - **08 Macro y benchmark:** contexto macro y comparación contra índice global.
-        - **09 Panel de decisión:** integración final para postura de acción.
-        """
-    )
+    seccion("Estructura Del Dashboard")
+
+    m1, m2 = st.columns(2, gap="large")
+
+    with m1:
+        module_card(
+            "00 Contextualización",
+            "Presenta el sentido económico del portafolio, el papel de cada empresa y la lógica estratégica de la selección de activos.",
+        )
+        module_card(
+            "01 Técnico",
+            "Analiza precios e indicadores por activo para identificar tendencia, momentum, cruces relevantes y zonas de seguimiento.",
+        )
+        module_card(
+            "02 Rendimientos",
+            "Resume comportamiento estadístico de los retornos, dispersión, extremos y contraste con supuestos de normalidad.",
+        )
+        module_card(
+            "03 GARCH",
+            "Modela volatilidad condicional para estudiar persistencia del riesgo y pronósticos dinámicos de incertidumbre.",
+        )
+        module_card(
+            "04 CAPM",
+            "Evalúa sensibilidad frente al mercado, beta, alpha y retorno esperado bajo el marco clásico de riesgo sistemático.",
+        )
+
+    with m2:
+        module_card(
+            "05 VaR / CVaR",
+            "Cuantifica riesgo extremo del portafolio mediante pérdida umbral y pérdida media en escenarios severos.",
+        )
+        module_card(
+            "06 Markowitz",
+            "Construye frontera eficiente y compara portafolios óptimos bajo criterios de mínima varianza, Sharpe y retorno objetivo.",
+        )
+        module_card(
+            "07 Señales",
+            "Integra reglas de lectura operativa para resumir alertas y condiciones de seguimiento por activo.",
+        )
+        module_card(
+            "08 Macro y Benchmark",
+            "Conecta el análisis del portafolio con contexto macroeconómico y comparación frente a índices de referencia.",
+        )
+        module_card(
+            "09 Panel de decisión",
+            "Integra resultados de los módulos anteriores para construir una lectura final y apoyar la postura de análisis.",
+        )
