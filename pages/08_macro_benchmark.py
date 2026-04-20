@@ -1,6 +1,16 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
+
+from ui.page_setup import setup_dashboard_page
+from ui.dashboard_ui import (
+    header_dashboard,
+    seccion,
+    nota,
+    tarjeta_kpi,
+    plot_card_header,
+    plot_card_footer,
+    toolbar_label,
+)
 
 from src.config import (
     ASSETS,
@@ -18,172 +28,184 @@ from src.plots import plot_benchmark_base100
 ensure_project_dirs()
 
 
-# ==============================
-# Estilos UI
-# ==============================
-def inject_kpi_cards_css():
-    st.markdown(
-        """
-        <style>
-        .section-intro-box {
-            background: #ffffff;
-            border: 1px solid rgba(15, 23, 42, 0.08);
-            border-radius: 18px;
-            padding: 16px 18px;
-            box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
-            margin-bottom: 0.75rem;
-        }
+def style_plot(fig, modo: str):
+    font_color = "#5B2132" if modo == "Estadístico" else "#334155"
+    grid_color = "rgba(148, 163, 184, 0.16)"
+    axis_title = "#0F172A"
+    tick_color = "#334155"
+    legend_font = "#334155" if modo == "General" else "#5B2132"
 
-        .section-intro-title {
-            font-size: 1rem;
-            font-weight: 700;
-            color: #0f172a;
-            margin-bottom: 0.2rem;
-        }
-
-        .section-intro-subtitle {
-            font-size: 0.86rem;
-            color: #64748b;
-            line-height: 1.45;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color=font_color, size=12),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
+            bgcolor="rgba(255,255,255,0.88)",
+            bordercolor="rgba(148, 163, 184, 0.22)",
+            borderwidth=1,
+            font=dict(color=legend_font, size=11),
+        ),
+        margin=dict(l=20, r=20, t=70, b=20),
+        hoverlabel=dict(
+            font_size=12,
+            bgcolor="#FFFFFF",
+            font_color="#0F172A",
+        ),
     )
 
-
-def section_intro(title: str, subtitle: str):
-    st.markdown(
-        f"""
-        <div class="section-intro-box">
-            <div class="section-intro-title">{title}</div>
-            <div class="section-intro-subtitle">{subtitle}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    fig.update_xaxes(
+        showgrid=True,
+        gridcolor=grid_color,
+        zeroline=False,
+        tickfont=dict(color=tick_color, size=12),
+        title_font=dict(color=axis_title, size=14, family="Inter, sans-serif"),
     )
+    fig.update_yaxes(
+        showgrid=True,
+        gridcolor=grid_color,
+        zeroline=False,
+        tickfont=dict(color=tick_color, size=12),
+        title_font=dict(color=axis_title, size=14, family="Inter, sans-serif"),
+    )
+    return fig
 
 
-def sanitize_text(text):
-    if text is None:
-        return ""
-    return str(text).replace("<", "").replace(">", "")
+def safe_metric(df: pd.DataFrame, filter_col: str, filter_val: str, value_col: str):
+    try:
+        return float(df.loc[df[filter_col] == filter_val, value_col].iloc[0])
+    except Exception:
+        return None
 
 
-def kpi_card(title, value, delta=None, delta_type="neu", caption=""):
-    title = sanitize_text(title)
-    value = sanitize_text(value)
-    delta = sanitize_text(delta) if delta is not None else ""
-    caption = sanitize_text(caption)
+def delta_label(value, positive_text, negative_text, neutral_text="Sin cambio"):
+    if value is None:
+        return None
+    if value > 0:
+        return positive_text
+    if value < 0:
+        return negative_text
+    return neutral_text
 
-    delta_html = ""
-    if delta:
-        delta_html = f'<div class="kpi-delta {delta_type}">{delta}</div>'
 
-    html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <style>
-            body {{
-                margin: 0;
-                padding: 0;
-                background: transparent;
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            }}
+def interpret_macro_context(rf_pct, inflation_yoy, usdcop_market, cop_per_usd):
+    parts = []
 
-            .kpi-card {{
-                background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-                border: 1px solid rgba(15, 23, 42, 0.08);
-                border-radius: 18px;
-                padding: 18px 18px 14px 18px;
-                box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
-                min-height: 124px;
-                box-sizing: border-box;
-                display: flex;
-                flex-direction: column;
-                justify-content: space-between;
-            }}
+    if rf_pct is not None:
+        parts.append(f"la tasa libre de riesgo se ubica en {rf_pct:.2f}%")
 
-            .kpi-label {{
-                font-size: 0.88rem;
-                font-weight: 600;
-                color: #475569;
-                margin-bottom: 0.35rem;
-                letter-spacing: 0.2px;
-            }}
+    if inflation_yoy is not None:
+        parts.append(f"la inflación interanual se estima en {inflation_yoy:.2%}")
 
-            .kpi-value {{
-                font-size: 1.85rem;
-                font-weight: 800;
-                color: #0f172a;
-                line-height: 1.1;
-                margin-bottom: 0.45rem;
-                word-break: break-word;
-            }}
+    if usdcop_market is not None and cop_per_usd is not None:
+        if usdcop_market > cop_per_usd:
+            parts.append("el USD/COP spot se encuentra por encima de su promedio anual")
+        elif usdcop_market < cop_per_usd:
+            parts.append("el USD/COP spot se encuentra por debajo de su promedio anual")
+        else:
+            parts.append("el USD/COP spot es similar a su promedio anual")
 
-            .kpi-delta {{
-                display: inline-block;
-                width: fit-content;
-                font-size: 0.80rem;
-                font-weight: 700;
-                padding: 0.28rem 0.55rem;
-                border-radius: 999px;
-                margin-top: 0.10rem;
-            }}
+    if not parts:
+        return "No fue posible construir una lectura automática del contexto macro."
+    return "En el periodo analizado, " + ", ".join(parts) + "."
 
-            .kpi-delta.pos {{
-                background-color: rgba(22, 163, 74, 0.10);
-                color: #15803d;
-            }}
 
-            .kpi-delta.neg {{
-                background-color: rgba(220, 38, 38, 0.10);
-                color: #b91c1c;
-            }}
+def interpret_relative_performance(ret_port, ret_bench, alpha_jensen, tracking_error):
+    parts = []
 
-            .kpi-delta.neu {{
-                background-color: rgba(100, 116, 139, 0.10);
-                color: #475569;
-            }}
+    if ret_port is not None and ret_bench is not None:
+        diff_ret = ret_port - ret_bench
+        if diff_ret > 0:
+            parts.append(f"el portafolio superó al benchmark por {diff_ret:.2%}")
+        elif diff_ret < 0:
+            parts.append(f"el portafolio quedó por debajo del benchmark en {abs(diff_ret):.2%}")
+        else:
+            parts.append("el portafolio tuvo un desempeño acumulado similar al benchmark")
 
-            .kpi-caption {{
-                font-size: 0.78rem;
-                color: #64748b;
-                margin-top: 0.65rem;
-                line-height: 1.35;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="kpi-card">
-            <div>
-                <div class="kpi-label">{title}</div>
-                <div class="kpi-value">{value}</div>
-                {delta_html}
-            </div>
-            <div class="kpi-caption">{caption}</div>
-        </div>
-    </body>
-    </html>
+    if alpha_jensen is not None:
+        if alpha_jensen > 0:
+            parts.append("el alpha de Jensen fue positivo")
+        elif alpha_jensen < 0:
+            parts.append("el alpha de Jensen fue negativo")
+        else:
+            parts.append("el alpha de Jensen fue cercano a cero")
+
+    if tracking_error is not None:
+        parts.append(f"el tracking error fue de {tracking_error:.4f}")
+
+    if not parts:
+        return "No fue posible construir una interpretación automática del desempeño relativo."
+    return "En síntesis, " + ", ".join(parts) + "."
+
+
+# ==============================
+# ESTILOS LOCALES
+# ==============================
+st.markdown(
     """
+    <style>
+    .bm-meta-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.7rem;
+        margin-top: 0.4rem;
+        margin-bottom: 1.1rem;
+    }
 
-    components.html(html, height=145)
+    .bm-mini-meta {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.5rem 0.85rem;
+        border-radius: 999px;
+        background: #ffffff;
+        border: 1px solid rgba(148, 163, 184, 0.30);
+        font-size: 0.83rem;
+        font-weight: 700;
+        color: #334155 !important;
+        box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04);
+    }
 
+    .bm-mini-meta strong,
+    .bm-mini-meta span,
+    .bm-mini-meta div {
+        color: #334155 !important;
+    }
 
-inject_kpi_cards_css()
+    .bm-mini-meta.benchmark-pill {
+        background: #EEF2FF;
+        border: 1px solid rgba(99, 102, 241, 0.30);
+        color: #3730A3 !important;
+    }
 
-st.title("Módulo 8 - Contexto macro y benchmark")
-st.caption(
-    "Compara el desempeño del portafolio frente a un benchmark global y contextualiza los resultados con variables macroeconómicas."
+    .bm-mini-meta.benchmark-pill strong,
+    .bm-mini-meta.benchmark-pill span,
+    .bm-mini-meta.benchmark-pill div {
+        color: #3730A3 !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
 # ==============================
-# Sidebar
+# SETUP GLOBAL
 # ==============================
-with st.sidebar:
-    st.header("Parámetros")
+modo, filtros_sidebar = setup_dashboard_page(
+    title="Dashboard Riesgo",
+    subtitle="Universidad Santo Tomás",
+    modo_default="General",
+    filtros_label="Parámetros De Benchmark",
+    filtros_expanded=False,
+)
 
+# ==============================
+# SIDEBAR
+# ==============================
+with filtros_sidebar:
     horizonte = st.selectbox(
         "Horizonte de análisis",
         [
@@ -196,6 +218,7 @@ with st.sidebar:
             "Personalizado",
         ],
         index=3,
+        key="bm_horizonte",
     )
 
     fecha_fin_ref = pd.to_datetime(DEFAULT_END_DATE)
@@ -219,65 +242,36 @@ with st.sidebar:
         start_date = (fecha_fin_ref - pd.DateOffset(years=5)).date()
         end_date = fecha_fin_ref.date()
     else:
-        start_date = st.date_input("Fecha inicial", value=DEFAULT_START_DATE, key="bm_start")
-        end_date = st.date_input("Fecha final", value=DEFAULT_END_DATE, key="bm_end")
+        c1, c2 = st.columns(2)
+        with c1:
+            start_date = st.date_input("Fecha inicial", value=DEFAULT_START_DATE, key="bm_start")
+        with c2:
+            end_date = st.date_input("Fecha final", value=DEFAULT_END_DATE, key="bm_end")
 
-    st.divider()
-    st.subheader("Modo de visualización")
-    modo = st.radio(
-        "Selecciona el nivel de detalle",
-        ["General", "Estadístico"],
-        index=0,
-    )
+    mostrar_tablas = st.checkbox("Mostrar tablas completas", value=False, key="bm_show_tables")
 
-    st.divider()
-    st.subheader("Opciones de visualización")
-    mostrar_tablas = st.checkbox("Mostrar tablas completas", value=False)
-
-    mostrar_estado_macro = False
-    mostrar_interpretacion_tecnica = False
-
-    with st.expander("Filtros secundarios"):
+    with st.expander("Filtros secundarios", expanded=False):
         if modo == "Estadístico":
             mostrar_interpretacion_tecnica = st.checkbox(
                 "Mostrar interpretación técnica",
                 value=True,
+                key="bm_show_tech_interp",
             )
             mostrar_estado_macro = st.checkbox(
                 "Mostrar estado de carga macro",
                 value=False,
+                key="bm_show_macro_status",
             )
         else:
+            mostrar_interpretacion_tecnica = False
             mostrar_estado_macro = st.checkbox(
                 "Mostrar estado de carga macro",
                 value=False,
+                key="bm_show_macro_status_general",
             )
 
 # ==============================
-# Resumen del módulo
-# ==============================
-st.markdown("### Resumen del módulo")
-if modo == "General":
-    st.write(
-        """
-        Este módulo permite comparar si el portafolio tuvo un comportamiento mejor, similar o peor
-        que su índice de referencia. Además, muestra variables macroeconómicas que ayudan a entender
-        el entorno financiero del periodo analizado.
-        """
-    )
-else:
-    st.write(
-        """
-        Este módulo evalúa el desempeño relativo del portafolio frente a un benchmark mediante métricas
-        como Alpha de Jensen, Tracking Error, Information Ratio y máximo drawdown, incorporando además
-        variables macroeconómicas relevantes para contextualizar el análisis.
-        """
-    )
-
-st.caption(f"Periodo analizado: {start_date} a {end_date}")
-
-# ==============================
-# Datos
+# DATOS
 # ==============================
 tickers = [meta["ticker"] for meta in ASSETS.values()] + [GLOBAL_BENCHMARK]
 bundle = load_market_bundle(tickers=tickers, start=str(start_date), end=str(end_date))
@@ -305,263 +299,305 @@ summary_df, extras_df, cum_port, cum_bench = benchmark_summary(
     rf_annual=rf_annual,
 )
 
-# ==============================
-# Contexto macro
-# ==============================
-if "source" in macro and macro["source"]:
-    st.caption(f"Fuente macro: {macro['source']}")
-
-if "last_updated" in macro and macro["last_updated"]:
-    st.caption(f"Última actualización: {macro['last_updated']}")
-
-if mostrar_estado_macro:
-    with st.expander("Ver estado de carga de variables macro"):
-        if macro["inflation_yoy"] != macro["inflation_yoy"]:
-            st.warning("No se pudo obtener inflación desde API. Usando fallback o valor no disponible.")
-
-        if macro["usdcop_market"] != macro["usdcop_market"]:
-            st.warning("No se pudo obtener USD/COP spot desde API. Usando fallback o valor no disponible.")
-
-        if macro["cop_per_usd"] != macro["cop_per_usd"]:
-            st.warning("No se pudo obtener USD/COP promedio anual desde API. Usando fallback o valor no disponible.")
-
-# ==============================
-# KPIs macroeconómicos
-# ==============================
-st.markdown("### Indicadores macroeconómicos")
-section_intro(
-    "Contexto macro relevante",
-    "Estas variables ayudan a interpretar el entorno financiero en el que se evaluó el portafolio y su benchmark.",
-)
-
 rf_pct = macro["risk_free_rate_pct"] if macro["risk_free_rate_pct"] == macro["risk_free_rate_pct"] else None
 inflation_yoy = macro["inflation_yoy"] if macro["inflation_yoy"] == macro["inflation_yoy"] else None
 usdcop_market = macro["usdcop_market"] if macro["usdcop_market"] == macro["usdcop_market"] else None
 cop_per_usd = macro["cop_per_usd"] if macro["cop_per_usd"] == macro["cop_per_usd"] else None
 
-infl_delta = None
-infl_delta_type = "neu"
-if inflation_yoy is not None:
-    if inflation_yoy > 0.05:
-        infl_delta = "Inflación alta"
-        infl_delta_type = "neg"
-    else:
-        infl_delta = "Inflación moderada"
-        infl_delta_type = "neu"
-
-fx_delta = None
-fx_delta_type = "neu"
-if usdcop_market is not None and cop_per_usd is not None:
-    if usdcop_market > cop_per_usd:
-        fx_delta = "Spot sobre promedio"
-        fx_delta_type = "neg"
-    elif usdcop_market < cop_per_usd:
-        fx_delta = "Spot bajo promedio"
-        fx_delta_type = "pos"
-
-col1, col2, col3, col4 = st.columns(4)
-
-with col1:
-    kpi_card(
-        "Tasa libre de riesgo (%)",
-        f"{rf_pct:.2f}" if rf_pct is not None else "N/D",
-        caption="Usada en métricas relativas de desempeño",
-    )
-
-with col2:
-    kpi_card(
-        "Inflación interanual",
-        f"{inflation_yoy:.2%}" if inflation_yoy is not None else "N/D",
-        delta=infl_delta,
-        delta_type=infl_delta_type,
-        caption="Variación interanual del nivel de precios",
-    )
-
-with col3:
-    kpi_card(
-        "USD/COP (spot)",
-        f"{usdcop_market:.2f}" if usdcop_market is not None else "N/D",
-        delta=fx_delta,
-        delta_type=fx_delta_type,
-        caption="Tasa de cambio observada en mercado",
-    )
-
-with col4:
-    kpi_card(
-        "USD/COP (promedio anual)",
-        f"{cop_per_usd:.2f}" if cop_per_usd is not None else "N/D",
-        caption="Promedio anual de referencia",
-    )
+ret_port = safe_metric(summary_df, "serie", "Portafolio", "ret_acumulado")
+ret_bench = safe_metric(summary_df, "serie", "Benchmark", "ret_acumulado")
+alpha_jensen = safe_metric(extras_df, "métrica", "Alpha de Jensen", "valor")
+tracking_error = safe_metric(extras_df, "métrica", "Tracking Error", "valor")
+information_ratio = safe_metric(extras_df, "métrica", "Information Ratio", "valor")
+max_drawdown = safe_metric(extras_df, "métrica", "Máximo drawdown", "valor")
 
 # ==============================
-# Comparación visual
+# HEADER
 # ==============================
-st.markdown("### Comparación visual")
-section_intro(
-    "Portafolio vs benchmark",
-    "El gráfico base 100 permite comparar el desempeño acumulado del portafolio frente a su índice de referencia.",
+header_dashboard(
+    "Módulo 8 - Contexto macro y benchmark",
+    "Compara el desempeño del portafolio frente a un benchmark global y contextualiza los resultados con variables macroeconómicas",
+    modo=modo,
 )
 
-st.plotly_chart(plot_benchmark_base100(cum_port, cum_bench), width="stretch")
-
 if modo == "General":
-    st.info(
-        """
-        **Cómo leer este gráfico**
-
-        - Si la línea del portafolio termina por encima del benchmark, hubo mejor desempeño acumulado.
-        - Si ambas líneas se mueven muy parecido, el portafolio siguió de cerca al índice de referencia.
-        - Caídas pronunciadas indican periodos de pérdida acumulada y mayor presión de riesgo.
-        """
+    nota(
+        "Este módulo permite comparar si el portafolio tuvo un comportamiento mejor, similar o peor que su benchmark, y además ubica ese resultado dentro del entorno macroeconómico observado."
     )
 else:
-    with st.expander("Ver interpretación técnica del gráfico"):
-        st.write(
-            """
-            El gráfico base 100 permite comparar trayectorias acumuladas normalizadas del portafolio
-            y del benchmark. La separación entre ambas curvas refleja desempeño relativo, mientras que
-            la amplitud de las caídas ayuda a identificar episodios de drawdown y sensibilidad a choques
-            de mercado.
-            """
+    nota(
+        "En modo estadístico se enfatiza el análisis de desempeño relativo frente al benchmark mediante métricas como Alpha de Jensen, Tracking Error, Information Ratio y drawdown, complementadas con contexto macroeconómico."
+    )
+
+if "source" in macro and macro["source"]:
+    st.caption(f"Fuente macro: {macro['source']}")
+if "last_updated" in macro and macro["last_updated"]:
+    st.caption(f"Última actualización macro: {macro['last_updated']}")
+
+# ==============================
+# RESUMEN
+# ==============================
+seccion("Resumen Del Módulo")
+
+if modo == "General":
+    nota(
+        "Se compara el portafolio equiponderado frente al benchmark global para evaluar si realmente agregó valor. El análisis se complementa con tasa libre de riesgo, inflación y tasa de cambio."
+    )
+else:
+    nota(
+        "Se evalúa el desempeño relativo del portafolio frente al benchmark mediante retorno acumulado, alpha, tracking error e information ratio, incorporando además variables macro para contextualizar la lectura."
+    )
+
+st.markdown(
+    f"""
+    <div class="bm-meta-row">
+        <div class="bm-mini-meta"><strong>Horizonte:</strong>&nbsp;{horizonte}</div>
+        <div class="bm-mini-meta"><strong>Inicio:</strong>&nbsp;{start_date}</div>
+        <div class="bm-mini-meta"><strong>Fin:</strong>&nbsp;{end_date}</div>
+        <div class="bm-mini-meta benchmark-pill"><strong>Benchmark:</strong>&nbsp;{GLOBAL_BENCHMARK}</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ==============================
+# TABS
+# ==============================
+tab1, tab2, tab3 = st.tabs([
+    "Contexto macro y benchmark",
+    "Desempeño relativo",
+    "Tablas e interpretación",
+])
+
+# ==============================
+# TAB 1
+# ==============================
+with tab1:
+    seccion("Indicadores Macroeconómicos")
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+        tarjeta_kpi(
+            "Tasa libre de riesgo",
+            f"{rf_pct:.2f}%" if rf_pct is not None else "N/D",
+            help_text="Proviene de macro_snapshot() y se usa como referencia en métricas ajustadas por riesgo.",
+            subtexto="Referencia base para comparar retorno frente a riesgo.",
+        )
+
+    with c2:
+        tarjeta_kpi(
+            "Inflación interanual",
+            f"{inflation_yoy:.2%}" if inflation_yoy is not None else "N/D",
+            delta_label(
+                inflation_yoy - 0.05 if inflation_yoy is not None else None,
+                "Inflación alta",
+                "Inflación moderada",
+                "Inflación cercana al umbral"
+            ),
+            help_text="Variación interanual del nivel general de precios.",
+            subtexto="Ayuda a contextualizar el entorno monetario del periodo.",
+        )
+
+    with c3:
+        fx_delta = None
+        if usdcop_market is not None and cop_per_usd is not None:
+            if usdcop_market > cop_per_usd:
+                fx_delta = "Spot sobre promedio"
+            elif usdcop_market < cop_per_usd:
+                fx_delta = "Spot bajo promedio"
+            else:
+                fx_delta = "Spot similar al promedio"
+
+        tarjeta_kpi(
+            "USD/COP spot",
+            f"{usdcop_market:.2f}" if usdcop_market is not None else "N/D",
+            fx_delta,
+            help_text="Tasa de cambio observada en el mercado.",
+            subtexto="Nivel actual de referencia frente al promedio anual.",
+        )
+
+    with c4:
+        tarjeta_kpi(
+            "USD/COP promedio anual",
+            f"{cop_per_usd:.2f}" if cop_per_usd is not None else "N/D",
+            help_text="Promedio anual de la tasa de cambio.",
+            subtexto="Sirve como referencia para comparar el spot observado.",
+        )
+
+    plot_card_footer(interpret_macro_context(rf_pct, inflation_yoy, usdcop_market, cop_per_usd))
+
+    if mostrar_estado_macro:
+        with st.expander("Ver estado de carga de variables macro"):
+            if inflation_yoy is None:
+                st.warning("No se pudo obtener inflación desde API. Se usó fallback o quedó no disponible.")
+            if usdcop_market is None:
+                st.warning("No se pudo obtener USD/COP spot desde API. Se usó fallback o quedó no disponible.")
+            if cop_per_usd is None:
+                st.warning("No se pudo obtener USD/COP promedio anual desde API. Se usó fallback o quedó no disponible.")
+
+    seccion("Comparación Visual")
+
+    plot_card_header(
+        "Portafolio vs benchmark",
+        "El gráfico base 100 permite comparar el desempeño acumulado del portafolio frente al índice de referencia.",
+        modo=modo,
+        caption="Una línea por encima de la otra sugiere mejor desempeño acumulado relativo.",
+    )
+
+    toolbar_label("Opciones de visualización")
+    g1, g2 = st.columns(2)
+    with g1:
+        clean_chart = st.checkbox("Vista limpia", value=False, key="bm_clean_chart")
+    with g2:
+        show_interpretation_box = st.checkbox("Mostrar guía de lectura", value=True, key="bm_show_chart_guide")
+
+    fig_benchmark = plot_benchmark_base100(cum_port, cum_bench)
+    fig_benchmark = style_plot(fig_benchmark, modo)
+    fig_benchmark.update_layout(
+        title=dict(
+            text="Portafolio Vs Benchmark (Base 100)",
+            x=0.03,
+            xanchor="left",
+            y=0.97,
+            yanchor="top",
+            font=dict(size=16, color="#0F172A"),
+        ),
+        margin=dict(l=20, r=20, t=70, b=20),
+    )
+    fig_benchmark.update_xaxes(tickfont=dict(size=12, color="#334155"))
+    fig_benchmark.update_yaxes(tickfont=dict(size=12, color="#334155"))
+
+    if clean_chart:
+        try:
+            fig_benchmark.update_layout(showlegend=False)
+        except Exception:
+            pass
+
+    st.plotly_chart(fig_benchmark, use_container_width=True)
+
+    if show_interpretation_box:
+        if modo == "General":
+            plot_card_footer(
+                "Si la línea del portafolio termina por encima del benchmark, hubo mejor desempeño acumulado. Si ambas series se mueven de forma muy parecida, el portafolio siguió de cerca al índice. Caídas profundas reflejan episodios de mayor presión de riesgo."
+            )
+        else:
+            plot_card_footer(
+                "La separación entre curvas refleja desempeño relativo acumulado. La amplitud de las caídas permite identificar drawdowns y sensibilidad del portafolio frente a choques de mercado."
+            )
+
+# ==============================
+# TAB 2
+# ==============================
+with tab2:
+    seccion("KPIs De Desempeño Relativo")
+
+    diff_ret = (ret_port - ret_bench) if ret_port is not None and ret_bench is not None else None
+
+    d1, d2, d3, d4 = st.columns(4)
+
+    with d1:
+        tarjeta_kpi(
+            "Retorno acumulado portafolio",
+            f"{ret_port:.2%}" if ret_port is not None else "N/D",
+            f"Diferencia: {diff_ret:.2%}" if diff_ret is not None else None,
+            help_text="Desempeño acumulado del portafolio en el periodo.",
+            subtexto="Resultado agregado de la cartera equiponderada.",
+        )
+
+    with d2:
+        tarjeta_kpi(
+            "Retorno acumulado benchmark",
+            f"{ret_bench:.2%}" if ret_bench is not None else "N/D",
+            help_text="Desempeño acumulado del benchmark global.",
+            subtexto="Punto de referencia para comparar generación de valor.",
+        )
+
+    with d3:
+        tarjeta_kpi(
+            "Alpha de Jensen",
+            f"{alpha_jensen:.4f}" if alpha_jensen is not None else "N/D",
+            delta_label(alpha_jensen, "Alpha positivo", "Alpha negativo", "Alpha neutro"),
+            help_text="Exceso de desempeño ajustado por riesgo sistemático.",
+            subtexto="Mide si el portafolio agregó valor frente a lo esperado por CAPM.",
+        )
+
+    with d4:
+        tarjeta_kpi(
+            "Tracking Error",
+            f"{tracking_error:.4f}" if tracking_error is not None else "N/D",
+            delta_label(
+                (0.05 - tracking_error) if tracking_error is not None else None,
+                "Desviación moderada",
+                "Alta desviación",
+                "Desviación límite",
+            ),
+            help_text="Desviación del portafolio frente al benchmark.",
+            subtexto="Cuantifica cuánto se aparta la cartera del índice de referencia.",
+        )
+
+    plot_card_footer(interpret_relative_performance(ret_port, ret_bench, alpha_jensen, tracking_error))
+
+    seccion("Métricas Complementarias")
+
+    e1, e2 = st.columns(2)
+
+    with e1:
+        tarjeta_kpi(
+            "Information Ratio",
+            f"{information_ratio:.4f}" if information_ratio is not None else "N/D",
+            delta_label(
+                information_ratio,
+                "Retorno activo eficiente",
+                "Retorno activo débil",
+                "Lectura neutral",
+            ),
+            help_text="Retorno activo por unidad de riesgo activo.",
+            subtexto="Relaciona generación de valor frente al benchmark con el tracking error.",
+        )
+
+    with e2:
+        tarjeta_kpi(
+            "Máximo drawdown",
+            f"{max_drawdown:.2%}" if max_drawdown is not None else "N/D",
+            help_text="Peor caída acumulada desde un máximo previo.",
+            subtexto="Mide la severidad del peor episodio de pérdida acumulada.",
         )
 
 # ==============================
-# KPIs de desempeño relativo
+# TAB 3
 # ==============================
-st.markdown("### KPIs de desempeño relativo")
-section_intro(
-    "Resumen ejecutivo del benchmark",
-    "Estas métricas resumen retorno acumulado, generación de alpha y grado de desviación frente al benchmark.",
-)
+with tab3:
+    seccion("Tablas De Resultados")
 
-try:
-    ret_port = float(summary_df.loc[summary_df["serie"] == "Portafolio", "ret_acumulado"].iloc[0])
-except Exception:
-    ret_port = None
+    if mostrar_tablas:
+        st.markdown("#### Desempeño: Portafolio vs benchmark")
+        st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
-try:
-    ret_bench = float(summary_df.loc[summary_df["serie"] == "Benchmark", "ret_acumulado"].iloc[0])
-except Exception:
-    ret_bench = None
-
-try:
-    alpha_jensen = float(extras_df.loc[extras_df["métrica"] == "Alpha de Jensen", "valor"].iloc[0])
-except Exception:
-    alpha_jensen = None
-
-try:
-    tracking_error = float(extras_df.loc[extras_df["métrica"] == "Tracking Error", "valor"].iloc[0])
-except Exception:
-    tracking_error = None
-
-ret_delta = None
-ret_delta_type = "neu"
-if ret_port is not None and ret_bench is not None:
-    diff_ret = ret_port - ret_bench
-    ret_delta = f"Diferencia: {diff_ret:.2%}"
-    ret_delta_type = "pos" if diff_ret > 0 else "neg" if diff_ret < 0 else "neu"
-
-alpha_delta = None
-alpha_delta_type = "neu"
-if alpha_jensen is not None:
-    if alpha_jensen > 0:
-        alpha_delta = "Alpha positivo"
-        alpha_delta_type = "pos"
-    elif alpha_jensen < 0:
-        alpha_delta = "Alpha negativo"
-        alpha_delta_type = "neg"
-
-te_delta = None
-te_delta_type = "neu"
-if tracking_error is not None:
-    if tracking_error > 0.05:
-        te_delta = "Alta desviación"
-        te_delta_type = "neg"
+        st.markdown("#### Métricas adicionales")
+        st.dataframe(extras_df, use_container_width=True, hide_index=True)
     else:
-        te_delta = "Desviación moderada"
-        te_delta_type = "neu"
+        with st.expander("Ver tablas completas de resultados"):
+            st.markdown("#### Desempeño: Portafolio vs benchmark")
+            st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
-c1, c2, c3, c4 = st.columns(4)
+            st.markdown("#### Métricas adicionales")
+            st.dataframe(extras_df, use_container_width=True, hide_index=True)
 
-with c1:
-    kpi_card(
-        "Retorno acumulado portafolio",
-        f"{ret_port:.2%}" if ret_port is not None else "N/D",
-        delta=ret_delta,
-        delta_type=ret_delta_type,
-        caption="Desempeño acumulado del portafolio",
-    )
+    seccion("Interpretación Final")
 
-with c2:
-    kpi_card(
-        "Retorno acumulado benchmark",
-        f"{ret_bench:.2%}" if ret_bench is not None else "N/D",
-        caption="Desempeño acumulado del benchmark global",
-    )
-
-with c3:
-    kpi_card(
-        "Alpha de Jensen",
-        f"{alpha_jensen:.4f}" if alpha_jensen is not None else "N/D",
-        delta=alpha_delta,
-        delta_type=alpha_delta_type,
-        caption="Exceso de desempeño ajustado por riesgo",
-    )
-
-with c4:
-    kpi_card(
-        "Tracking Error",
-        f"{tracking_error:.4f}" if tracking_error is not None else "N/D",
-        delta=te_delta,
-        delta_type=te_delta_type,
-        caption="Desviación del portafolio frente al benchmark",
-    )
-
-# ==============================
-# Tablas
-# ==============================
-st.markdown("### Tablas de resultados")
-if mostrar_tablas:
-    st.subheader("Desempeño: portafolio vs benchmark")
-    st.dataframe(summary_df, width="stretch")
-
-    st.subheader("Métricas adicionales")
-    st.dataframe(extras_df, width="stretch")
-else:
-    with st.expander("Ver tablas completas de resultados"):
-        st.subheader("Desempeño: portafolio vs benchmark")
-        st.dataframe(summary_df, width="stretch")
-
-        st.subheader("Métricas adicionales")
-        st.dataframe(extras_df, width="stretch")
-
-# ==============================
-# Interpretación
-# ==============================
-if modo == "General":
-    st.markdown("### Interpretación")
-    st.success(
-        """
-        **Lectura sencilla de resultados**
-
-        - El benchmark sirve como punto de comparación para saber si el portafolio realmente agregó valor.
-        - Un alpha positivo sugiere mejor desempeño que el esperado según su riesgo de mercado.
-        - Un tracking error alto indica que el portafolio se aleja bastante del benchmark.
-        - Un drawdown alto indica que en algún momento hubo una caída acumulada fuerte.
-        """
-    )
-else:
-    st.markdown("### Interpretación técnica")
-    if mostrar_interpretacion_tecnica:
-        st.info(
-            """
-            **Interpretación del benchmark y del contexto macro**
-
-            - El gráfico base 100 permite comparar visualmente la trayectoria acumulada del portafolio frente al benchmark.
-            - Un **Alpha de Jensen** positivo sugiere que el portafolio obtuvo un desempeño superior al explicado por su nivel de riesgo sistemático.
-            - Un **Tracking Error** alto indica mayor desviación frente al benchmark, mientras que uno bajo sugiere un comportamiento más cercano al índice de referencia.
-            - El **Information Ratio** resume cuánto retorno activo genera el portafolio por unidad de riesgo activo.
-            - El **máximo drawdown** muestra la peor caída acumulada desde un máximo previo, y es clave para evaluar pérdidas severas.
-            - El contexto macroeconómico, en particular la tasa libre de riesgo, la inflación y la tasa de cambio, ayuda a interpretar el entorno financiero en el que se evalúa el portafolio.
-            """
+    if modo == "General":
+        nota(
+            "El benchmark funciona como punto de comparación para evaluar si el portafolio realmente agregó valor. Un alpha positivo sugiere un desempeño superior al esperado según su riesgo de mercado, mientras que un tracking error alto indica que la cartera se aleja más del índice de referencia."
         )
+        nota(
+            "La lectura conjunta con inflación, tasa libre de riesgo y tasa de cambio permite entender mejor si el resultado del portafolio ocurrió en un entorno favorable, exigente o volátil."
+        )
+    else:
+        if mostrar_interpretacion_tecnica:
+            nota(
+                "El análisis relativo frente al benchmark debe leerse de forma conjunta: el retorno acumulado muestra el resultado observado, el alpha de Jensen resume exceso de desempeño ajustado por riesgo sistemático, el tracking error cuantifica riesgo activo, el information ratio mide eficiencia del retorno activo y el máximo drawdown refleja severidad de las pérdidas acumuladas."
+            )
+            nota(
+                "Desde el punto de vista macroeconómico, la tasa libre de riesgo afecta el costo de oportunidad y el cálculo de métricas ajustadas por riesgo, mientras que inflación y tasa de cambio ayudan a contextualizar el entorno financiero en el que se generó el desempeño relativo."
+            )

@@ -1,6 +1,16 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
+
+from ui.page_setup import setup_dashboard_page
+from ui.dashboard_ui import (
+    header_dashboard,
+    seccion,
+    nota,
+    tarjeta_kpi,
+    plot_card_header,
+    plot_card_footer,
+    toolbar_label,
+)
 
 from src.config import (
     ASSETS,
@@ -19,170 +29,103 @@ from src.plots import plot_scatter_regression
 ensure_project_dirs()
 
 
-# ==============================
-# Estilos UI
-# ==============================
-def inject_kpi_cards_css():
-    st.markdown(
-        """
-        <style>
-        .section-intro-box {
-            background: #ffffff;
-            border: 1px solid rgba(15, 23, 42, 0.08);
-            border-radius: 18px;
-            padding: 16px 18px;
-            box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
-            margin-bottom: 0.75rem;
-        }
+def style_plot(fig, modo: str):
+    font_color = "#6B7280" if modo == "Estadístico" else "#334155"
+    grid_color = "rgba(148, 163, 184, 0.16)"
+    legend_font = "#334155" if modo == "General" else "#5B2132"
+    axis_title = "#0F172A"
+    tick_color = "#475569"
 
-        .section-intro-title {
-            font-size: 1rem;
-            font-weight: 700;
-            color: #0f172a;
-            margin-bottom: 0.2rem;
-        }
-
-        .section-intro-subtitle {
-            font-size: 0.86rem;
-            color: #64748b;
-            line-height: 1.45;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color=font_color),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
+            bgcolor="rgba(255,255,255,0)",
+            bordercolor="rgba(0,0,0,0)",
+            borderwidth=0,
+            font=dict(color=legend_font, size=11),
+        ),
+        margin=dict(l=20, r=20, t=60, b=20),
+        hoverlabel=dict(font_size=12, bgcolor="#FFFFFF", font_color="#0F172A"),
     )
 
-
-def section_intro(title: str, subtitle: str):
-    st.markdown(
-        f"""
-        <div class="section-intro-box">
-            <div class="section-intro-title">{title}</div>
-            <div class="section-intro-subtitle">{subtitle}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    fig.update_xaxes(
+        showgrid=True,
+        gridcolor=grid_color,
+        zeroline=False,
+        tickfont=dict(color=tick_color),
+        title_font=dict(color=axis_title),
     )
+    fig.update_yaxes(
+        showgrid=True,
+        gridcolor=grid_color,
+        zeroline=False,
+        tickfont=dict(color=tick_color),
+        title_font=dict(color=axis_title),
+    )
+    return fig
 
 
-def sanitize_text(text):
-    if text is None:
-        return ""
-    return str(text).replace("<", "").replace(">", "")
+def interpret_capm(beta, alpha_diaria, r_squared, expected_return, rf_annual):
+    parts = []
+
+    if beta is not None:
+        if beta > 1:
+            parts.append(f"La beta de {beta:.4f} sugiere que el activo es más sensible que el mercado")
+        elif beta < 1:
+            parts.append(f"La beta de {beta:.4f} indica un perfil más defensivo que el benchmark")
+        else:
+            parts.append(f"La beta de {beta:.4f} sugiere sensibilidad similar a la del mercado")
+
+    if alpha_diaria is not None:
+        parts.append(f"el alpha diario estimado es {alpha_diaria:.6f}")
+
+    if r_squared is not None:
+        parts.append(f"y el R² del ajuste es {r_squared:.4f}")
+
+    if expected_return is not None:
+        parts.append(
+            f". Bajo CAPM, el retorno esperado anual es {expected_return:.2%}, frente a una tasa libre de riesgo de {rf_annual:.2%}"
+        )
+
+    text = ", ".join(parts).replace(", .", ". ").strip()
+    if not text:
+        return "No fue posible construir una interpretación automática del ajuste CAPM."
+    return text + "." if not text.endswith(".") else text
 
 
-def kpi_card(title, value, delta=None, delta_type="neu", caption=""):
-    title = sanitize_text(title)
-    value = sanitize_text(value)
-    delta = sanitize_text(delta) if delta is not None else ""
-    caption = sanitize_text(caption)
-
-    delta_html = ""
-    if delta:
-        delta_html = f'<div class="kpi-delta {delta_type}">{delta}</div>'
-
-    html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <style>
-            body {{
-                margin: 0;
-                padding: 0;
-                background: transparent;
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            }}
-
-            .kpi-card {{
-                background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-                border: 1px solid rgba(15, 23, 42, 0.08);
-                border-radius: 18px;
-                padding: 18px 18px 14px 18px;
-                box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
-                min-height: 124px;
-                box-sizing: border-box;
-                display: flex;
-                flex-direction: column;
-                justify-content: space-between;
-            }}
-
-            .kpi-label {{
-                font-size: 0.88rem;
-                font-weight: 600;
-                color: #475569;
-                margin-bottom: 0.35rem;
-                letter-spacing: 0.2px;
-            }}
-
-            .kpi-value {{
-                font-size: 1.85rem;
-                font-weight: 800;
-                color: #0f172a;
-                line-height: 1.1;
-                margin-bottom: 0.45rem;
-                word-break: break-word;
-            }}
-
-            .kpi-delta {{
-                display: inline-block;
-                width: fit-content;
-                font-size: 0.80rem;
-                font-weight: 700;
-                padding: 0.28rem 0.55rem;
-                border-radius: 999px;
-                margin-top: 0.10rem;
-            }}
-
-            .kpi-delta.pos {{
-                background-color: rgba(22, 163, 74, 0.10);
-                color: #15803d;
-            }}
-
-            .kpi-delta.neg {{
-                background-color: rgba(220, 38, 38, 0.10);
-                color: #b91c1c;
-            }}
-
-            .kpi-delta.neu {{
-                background-color: rgba(100, 116, 139, 0.10);
-                color: #475569;
-            }}
-
-            .kpi-caption {{
-                font-size: 0.78rem;
-                color: #64748b;
-                margin-top: 0.65rem;
-                line-height: 1.35;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="kpi-card">
-            <div>
-                <div class="kpi-label">{title}</div>
-                <div class="kpi-value">{value}</div>
-                {delta_html}
-            </div>
-            <div class="kpi-caption">{caption}</div>
-        </div>
-    </body>
-    </html>
-    """
-
-    components.html(html, height=145)
+def interpret_scatter():
+    return "La nube de puntos muestra cómo se relacionan los excesos de retorno del activo y del benchmark. La pendiente de la recta resume la beta, mientras que la dispersión alrededor refleja riesgo idiosincrático."
 
 
-inject_kpi_cards_css()
+def classification_note(classification):
+    if not classification:
+        return "No fue posible clasificar el activo frente al benchmark."
+    return f"La clasificación obtenida es: {classification}. Esta etiqueta resume si el activo se comporta de forma más agresiva, defensiva o cercana al mercado."
 
-st.title("Módulo 4 - CAPM y Beta")
-st.caption("Evalúa sensibilidad al mercado, rendimiento esperado y riesgo sistemático del activo.")
 
 # ==============================
-# Sidebar
+# SETUP GLOBAL
 # ==============================
-with st.sidebar:
-    st.header("Parámetros CAPM")
-    asset_name = st.selectbox("Activo", list(ASSETS.keys()), index=0)
+modo, filtros_sidebar = setup_dashboard_page(
+    title="Dashboard Riesgo",
+    subtitle="Universidad Santo Tomás",
+    modo_default="General",
+    filtros_label="Parámetros CAPM",
+    filtros_expanded=False,
+)
+
+# ==============================
+# SIDEBAR
+# ==============================
+with filtros_sidebar:
+    asset_name = st.selectbox("Activo", list(ASSETS.keys()), index=0, key="capm_asset")
 
     horizonte = st.selectbox(
         "Horizonte de análisis",
@@ -196,6 +139,7 @@ with st.sidebar:
             "Personalizado",
         ],
         index=3,
+        key="capm_horizonte",
     )
 
     fecha_fin_ref = pd.to_datetime(DEFAULT_END_DATE)
@@ -219,27 +163,23 @@ with st.sidebar:
         start_date = (fecha_fin_ref - pd.DateOffset(years=5)).date()
         end_date = fecha_fin_ref.date()
     else:
-        start_date = st.date_input("Fecha inicial", value=DEFAULT_START_DATE, key="capm_start")
-        end_date = st.date_input("Fecha final", value=DEFAULT_END_DATE, key="capm_end")
+        c1, c2 = st.columns(2)
+        with c1:
+            start_date = st.date_input("Fecha inicial", value=DEFAULT_START_DATE, key="capm_start")
+        with c2:
+            end_date = st.date_input("Fecha final", value=DEFAULT_END_DATE, key="capm_end")
 
-    st.divider()
-    st.subheader("Modo de visualización")
-    modo = st.radio(
-        "Selecciona el nivel de detalle",
-        ["General", "Estadístico"],
-        index=0,
-    )
-
-    st.divider()
-    st.subheader("Opciones de visualización")
-    mostrar_tabla = st.checkbox("Mostrar tabla técnica", value=False)
-
+    mostrar_tabla = st.checkbox("Mostrar tabla técnica", value=False, key="capm_show_table")
     mostrar_interpretacion_tecnica = False
     if modo == "Estadístico":
-        mostrar_interpretacion_tecnica = st.checkbox("Mostrar interpretación técnica", value=True)
+        mostrar_interpretacion_tecnica = st.checkbox(
+            "Mostrar interpretación técnica",
+            value=True,
+            key="capm_show_tech_interp"
+        )
 
 # ==============================
-# Datos
+# DATOS
 # ==============================
 ticker = get_ticker(asset_name)
 benchmark_ticker = get_local_benchmark(asset_name)
@@ -271,36 +211,37 @@ if not res:
     st.stop()
 
 # ==============================
-# Resumen
+# HEADER
 # ==============================
-st.markdown("### Resumen del módulo")
+header_dashboard(
+    "Módulo 4 - CAPM y Beta",
+    "Evalúa sensibilidad al mercado, rendimiento esperado y riesgo sistemático del activo",
+    modo=modo,
+)
+
 if modo == "General":
-    st.write(
-        f"""
-        Este módulo compara **{asset_name} ({ticker})** con su benchmark local **({benchmark_ticker})**
-        para medir qué tan sensible es el activo a los movimientos del mercado y cuál sería su
-        rendimiento esperado bajo CAPM.
-        """
+    nota("Este módulo muestra qué tan sensible es el activo frente al benchmark y cómo se estima su retorno esperado bajo CAPM.")
+else:
+    nota("En modo estadístico se enfatiza la beta como medida de riesgo sistemático, el alpha, el ajuste de regresión y la lectura económica del CAPM.")
+
+# ==============================
+# RESUMEN
+# ==============================
+seccion("Resumen Del Módulo")
+
+if modo == "General":
+    nota(
+        f"Se compara {asset_name} ({ticker}) con su benchmark local {benchmark_ticker} entre {start_date} y {end_date} para medir sensibilidad al mercado y retorno esperado."
     )
 else:
-    st.write(
-        f"""
-        Este módulo estima la beta, el alpha diario, el ajuste de la regresión y el rendimiento esperado
-        del activo **{asset_name} ({ticker})** frente al benchmark **{benchmark_ticker}**, bajo el marco
-        del CAPM.
-        """
+    nota(
+        f"Se estima beta, alpha diario, R² y retorno esperado CAPM para {asset_name} ({ticker}) frente al benchmark {benchmark_ticker} en el periodo analizado."
     )
-
-st.caption(f"Periodo analizado: {start_date} a {end_date}")
 
 # ==============================
 # KPIs
 # ==============================
-st.markdown("### KPIs CAPM")
-section_intro(
-    "Resumen ejecutivo del modelo",
-    "Aquí se condensan la sensibilidad al mercado, el ajuste del modelo y el retorno esperado estimado bajo CAPM.",
-)
+seccion("KPIs CAPM")
 
 beta = res.get("beta")
 alpha_diaria = res.get("alpha_diaria")
@@ -308,103 +249,86 @@ r_squared = res.get("r_squared")
 expected_return = res.get("expected_return_capm_annual")
 classification = res.get("classification")
 
-beta_delta = None
-beta_delta_type = "neu"
+beta_delta = ""
 if beta is not None:
     if beta > 1:
         beta_delta = "Más sensible que el mercado"
-        beta_delta_type = "neg"
     elif beta < 1:
         beta_delta = "Más defensivo que el mercado"
-        beta_delta_type = "pos"
     else:
         beta_delta = "Sensibilidad similar al mercado"
-        beta_delta_type = "neu"
 
-alpha_delta = None
-alpha_delta_type = "neu"
+alpha_delta = ""
 if alpha_diaria is not None:
     if alpha_diaria > 0:
         alpha_delta = "Alpha positivo"
-        alpha_delta_type = "pos"
     elif alpha_diaria < 0:
         alpha_delta = "Alpha negativo"
-        alpha_delta_type = "neg"
 
-r2_delta = None
-r2_delta_type = "neu"
+r2_delta = ""
 if r_squared is not None:
     if r_squared >= 0.60:
         r2_delta = "Buen ajuste"
-        r2_delta_type = "pos"
     elif r_squared >= 0.30:
         r2_delta = "Ajuste moderado"
-        r2_delta_type = "neu"
     else:
         r2_delta = "Ajuste bajo"
-        r2_delta_type = "neg"
 
-ret_delta = None
-ret_delta_type = "neu"
+ret_delta = ""
 if expected_return is not None:
     if expected_return > rf_annual:
         ret_delta = "Sobre tasa libre de riesgo"
-        ret_delta_type = "pos"
     elif expected_return < rf_annual:
         ret_delta = "Bajo tasa libre de riesgo"
-        ret_delta_type = "neg"
 
 c1, c2, c3, c4 = st.columns(4)
 
 with c1:
-    kpi_card(
+    tarjeta_kpi(
         "Beta",
         f"{beta:.4f}" if beta is not None else "N/D",
-        delta=beta_delta,
-        delta_type=beta_delta_type,
-        caption="Pendiente de la regresión frente al benchmark",
+        beta_delta,
+        help_text="Pendiente de la regresión del activo frente al benchmark.",
+        subtexto="Sensibilidad sistemática frente al mercado.",
     )
 
 with c2:
-    kpi_card(
+    tarjeta_kpi(
         "Alpha diaria",
         f"{alpha_diaria:.6f}" if alpha_diaria is not None else "N/D",
-        delta=alpha_delta,
-        delta_type=alpha_delta_type,
-        caption="Componente no explicado por el mercado",
+        alpha_delta,
+        help_text="Componente del rendimiento no explicado por el mercado.",
+        subtexto="Exceso de retorno no explicado por la beta.",
     )
 
 with c3:
-    kpi_card(
+    tarjeta_kpi(
         "R²",
         f"{r_squared:.4f}" if r_squared is not None else "N/D",
-        delta=r2_delta,
-        delta_type=r2_delta_type,
-        caption="Proporción explicada por la regresión CAPM",
+        r2_delta,
+        help_text="Proporción de la variación explicada por la regresión CAPM.",
+        subtexto="Capacidad explicativa del ajuste lineal.",
     )
 
 with c4:
-    kpi_card(
+    tarjeta_kpi(
         "Retorno esperado anual",
         f"{expected_return:.2%}" if expected_return is not None else "N/D",
-        delta=ret_delta,
-        delta_type=ret_delta_type,
-        caption="Rendimiento estimado bajo CAPM",
+        ret_delta,
+        help_text="Rendimiento esperado anual bajo CAPM.",
+        subtexto="Retorno teórico compatible con el riesgo sistemático.",
     )
 
-# ==============================
-# Clasificación del activo
-# ==============================
-st.markdown("### Clasificación del activo")
-section_intro(
-    "Perfil frente al mercado",
-    "Esta clasificación resume el comportamiento del activo en términos de agresividad o defensividad relativa frente al benchmark.",
-)
-
-st.info(f"Clasificación: **{classification}**" if classification is not None else "Clasificación no disponible")
+plot_card_footer(interpret_capm(beta, alpha_diaria, r_squared, expected_return, rf_annual))
 
 # ==============================
-# Tabla técnica
+# CLASIFICACIÓN
+# ==============================
+seccion("Clasificación Del Activo")
+nota(classification_note(classification))
+
+# ==============================
+# TABLA TÉCNICA
 # ==============================
 summary_df = pd.DataFrame(
     {
@@ -426,24 +350,36 @@ summary_df = pd.DataFrame(
         ],
     }
 )
-
 summary_df["value"] = summary_df["value"].astype(str)
 
-st.markdown("### Resumen técnico")
+seccion("Resumen Técnico")
+
 if mostrar_tabla:
-    st.dataframe(summary_df, width="stretch")
+    st.dataframe(summary_df, use_container_width=True)
 else:
     with st.expander("Ver tabla técnica completa"):
-        st.dataframe(summary_df, width="stretch")
+        st.dataframe(summary_df, use_container_width=True)
 
 # ==============================
-# Gráfico
+# GRÁFICO
 # ==============================
-st.markdown("### Regresión CAPM")
-section_intro(
+seccion("Regresión CAPM")
+
+plot_card_header(
     "Relación activo-mercado",
     "El diagrama de dispersión muestra cómo responde el activo a los movimientos del benchmark y permite interpretar visualmente la beta.",
+    modo=modo,
+    caption="Usa los filtros para limpiar la lectura o enfatizar la recta de regresión.",
 )
+
+toolbar_label("Capas del gráfico")
+cg1, cg2, cg3 = st.columns(3)
+with cg1:
+    show_points = st.checkbox("Puntos", value=True, key="capm_show_points")
+with cg2:
+    show_line = st.checkbox("Recta CAPM", value=True, key="capm_show_line")
+with cg3:
+    clean_view = st.checkbox("Vista limpia", value=False, key="capm_clean_view")
 
 fig = plot_scatter_regression(
     x=res["scatter_data"]["market_excess"],
@@ -451,78 +387,75 @@ fig = plot_scatter_regression(
     yhat=res["regression_line"]["y"],
     title="Regresión CAPM",
 )
-st.plotly_chart(fig, width="stretch")
+fig = style_plot(fig, modo)
 
-if modo == "General":
-    st.info(
-        """
-        **Cómo leer este gráfico**
+fig.update_layout(
+    title=dict(
+        text="Regresión CAPM",
+        x=0.03,
+        xanchor="left",
+        y=0.97,
+        yanchor="top",
+    ),
+    margin=dict(l=20, r=20, t=70, b=20),
+)
 
-        - Cada punto representa una observación del activo frente al benchmark.
-        - La línea resume la relación promedio entre ambos.
-        - Si la pendiente es alta, el activo reacciona más fuerte a los movimientos del mercado.
-        """
-    )
-else:
-    with st.expander("Ver interpretación técnica del gráfico"):
-        st.write(
-            """
-            El diagrama de dispersión muestra la relación entre el exceso de retorno del benchmark
-            y el exceso de retorno del activo. La pendiente de la recta estimada corresponde a la beta,
-            mientras que la dispersión alrededor de la recta se relaciona con el componente idiosincrático.
-            """
-        )
+for trace in fig.data:
+    trace_name = str(getattr(trace, "name", "") or "").lower()
+
+    if any(k in trace_name for k in ["scatter", "puntos", "observ", "asset", "activo"]):
+        trace.visible = True if show_points else "legendonly"
+        try:
+            trace.marker.color = "#7DD3FC" if modo == "General" else "#F9A8D4"
+            trace.marker.size = 7
+            trace.opacity = 0.78
+        except Exception:
+            pass
+
+    elif any(k in trace_name for k in ["regression", "recta", "line", "fit"]):
+        trace.visible = True if show_line else "legendonly"
+        try:
+            trace.line.color = "#22C55E" if modo == "General" else "#FB7185"
+            trace.line.width = 2.8
+        except Exception:
+            pass
+
+if clean_view:
+    try:
+        fig.update_layout(showlegend=False)
+    except Exception:
+        pass
+
+st.plotly_chart(fig, use_container_width=True)
+plot_card_footer(interpret_scatter())
 
 # ==============================
-# Interpretación
+# INTERPRETACIÓN
 # ==============================
-st.markdown("### Interpretación")
+seccion("Interpretación")
 
 if modo == "General":
     if beta is not None:
         if beta > 1:
-            st.success(
-                """
-                **Lectura sencilla**
-                - El activo se mueve con más intensidad que el mercado.
-                - Cuando el mercado sube o baja, este activo tiende a amplificar ese movimiento.
-                - Eso implica mayor sensibilidad y, en general, mayor riesgo sistemático.
-                """
+            nota(
+                "El activo se mueve con más intensidad que el mercado. Esto implica mayor sensibilidad y, en general, mayor riesgo sistemático."
             )
         elif beta < 1:
-            st.success(
-                """
-                **Lectura sencilla**
-                - El activo se mueve con menor intensidad que el mercado.
-                - Tiene un perfil más defensivo frente a cambios del benchmark.
-                - Eso sugiere menor exposición al riesgo sistemático.
-                """
+            nota(
+                "El activo se mueve con menor intensidad que el benchmark. Su perfil es relativamente más defensivo frente al riesgo sistemático."
             )
         else:
-            st.success(
-                """
-                **Lectura sencilla**
-                - El activo se mueve de forma parecida al mercado.
-                - Su sensibilidad frente al benchmark es cercana a la del promedio del mercado.
-                """
+            nota(
+                "El activo presenta una sensibilidad cercana a la del mercado, con una beta aproximadamente unitaria."
             )
 else:
     if mostrar_interpretacion_tecnica:
-        st.info(
-            """
-            **Interpretación económica del CAPM y la beta**
-
-            - **Beta > 1**: el activo presenta mayor sensibilidad a los movimientos del mercado, por lo que su **riesgo sistemático** es superior al del benchmark.
-            - **Beta < 1**: el activo muestra un comportamiento más defensivo y menor exposición al riesgo sistemático.
-            - **Beta ≈ 1**: el activo tiende a moverse en línea con el mercado.
-            - El **riesgo sistemático** es el componente del riesgo que no puede eliminarse mediante diversificación, porque depende de factores de mercado.
-            - El **riesgo no sistemático** corresponde a factores propios del activo o de la firma y, en teoría, puede reducirse mediante diversificación.
-            - En el CAPM, el rendimiento esperado remunera principalmente la exposición al **riesgo sistemático**, capturada por la beta.
-            """
+        nota(
+            "Beta mayor que uno implica mayor sensibilidad al mercado; beta menor que uno sugiere un perfil más defensivo. En el marco CAPM, el rendimiento esperado remunera principalmente la exposición al riesgo sistemático, mientras que el riesgo no sistemático es diversificable."
         )
 
 # ==============================
-# Contexto adicional
+# CONTEXTO ADICIONAL
 # ==============================
 if modo == "Estadístico":
     with st.expander("Ver contexto de tasa libre de riesgo"):
