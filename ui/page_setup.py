@@ -27,11 +27,14 @@ def setup_dashboard_page(
         logo_path=logo_path,
     )
 
-    # 3. Panel de filtros
+        # 3. Panel de filtros
     modo, filtros_sidebar = render_sidebar_panel(
         modo_default=modo_default,
         filtros_label=filtros_label,
         filtros_expanded=filtros_expanded,
     )
+
+    # 4. Reaplicar estilos según modo activo
+    aplicar_estilos_globales(modo=modo)
 
     return modo, filtros_sidebar

@@ -1,7 +1,17 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import numpy as np
 import pandas as pd
+
+from ui.page_setup import setup_dashboard_page
+from ui.dashboard_ui import (
+    header_dashboard,
+    seccion,
+    nota,
+    tarjeta_kpi,
+    plot_card_header,
+    plot_card_footer,
+    toolbar_label,
+)
 
 from src.config import ASSETS, DEFAULT_START_DATE, DEFAULT_END_DATE, ensure_project_dirs
 from src.download import load_market_bundle
@@ -19,157 +29,62 @@ from src.portfolio_optimization import optimize_target_return
 ensure_project_dirs()
 
 
-# ==============================
-# Estilos UI
-# ==============================
-def inject_kpi_cards_css():
-    st.markdown(
-        """
-        <style>
-        .section-intro-box {
-            background: #ffffff;
-            border: 1px solid rgba(15, 23, 42, 0.08);
-            border-radius: 18px;
-            padding: 16px 18px;
-            box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
-            margin-bottom: 0.75rem;
-        }
+def style_plot(fig, modo: str):
+    font_color = "#5B2132" if modo == "Estadístico" else "#334155"
+    grid_color = "rgba(148, 163, 184, 0.16)"
+    axis_title = "#0F172A"
+    tick_color = "#334155"
+    legend_font = "#334155" if modo == "General" else "#5B2132"
 
-        .section-intro-title {
-            font-size: 1rem;
-            font-weight: 700;
-            color: #0f172a;
-            margin-bottom: 0.2rem;
-        }
-
-        .section-intro-subtitle {
-            font-size: 0.86rem;
-            color: #64748b;
-            line-height: 1.45;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color=font_color, size=12),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
+            bgcolor="rgba(255,255,255,0.88)",
+            bordercolor="rgba(148, 163, 184, 0.22)",
+            borderwidth=1,
+            font=dict(color=legend_font, size=11),
+        ),
+        margin=dict(l=20, r=20, t=70, b=20),
+        hoverlabel=dict(
+            font_size=12,
+            bgcolor="#FFFFFF",
+            font_color="#0F172A",
+        ),
     )
 
-
-def section_intro(title: str, subtitle: str):
-    st.markdown(
-        f"""
-        <div class="section-intro-box">
-            <div class="section-intro-title">{title}</div>
-            <div class="section-intro-subtitle">{subtitle}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    fig.update_xaxes(
+        showgrid=True,
+        gridcolor=grid_color,
+        zeroline=False,
+        tickfont=dict(color=tick_color, size=12),
+        title_font=dict(color=axis_title, size=14, family="Inter, sans-serif"),
+    )
+    fig.update_yaxes(
+        showgrid=True,
+        gridcolor=grid_color,
+        zeroline=False,
+        tickfont=dict(color=tick_color, size=12),
+        title_font=dict(color=axis_title, size=14, family="Inter, sans-serif"),
     )
 
+    try:
+        fig.update_coloraxes(
+            colorbar=dict(
+                tickfont=dict(color=tick_color, size=11),
+                title=dict(font=dict(color=axis_title, size=12)),
+            )
+        )
+    except Exception:
+        pass
 
-def sanitize_text(text):
-    if text is None:
-        return ""
-    return str(text).replace("<", "").replace(">", "")
-
-
-def kpi_card(title, value, delta=None, delta_type="neu", caption=""):
-    title = sanitize_text(title)
-    value = sanitize_text(value)
-    delta = sanitize_text(delta) if delta is not None else ""
-    caption = sanitize_text(caption)
-
-    delta_html = ""
-    if delta:
-        delta_html = f'<div class="kpi-delta {delta_type}">{delta}</div>'
-
-    html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <style>
-            body {{
-                margin: 0;
-                padding: 0;
-                background: transparent;
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            }}
-
-            .kpi-card {{
-                background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-                border: 1px solid rgba(15, 23, 42, 0.08);
-                border-radius: 18px;
-                padding: 18px 18px 14px 18px;
-                box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
-                min-height: 124px;
-                box-sizing: border-box;
-                display: flex;
-                flex-direction: column;
-                justify-content: space-between;
-            }}
-
-            .kpi-label {{
-                font-size: 0.88rem;
-                font-weight: 600;
-                color: #475569;
-                margin-bottom: 0.35rem;
-                letter-spacing: 0.2px;
-            }}
-
-            .kpi-value {{
-                font-size: 1.85rem;
-                font-weight: 800;
-                color: #0f172a;
-                line-height: 1.1;
-                margin-bottom: 0.45rem;
-                word-break: break-word;
-            }}
-
-            .kpi-delta {{
-                display: inline-block;
-                width: fit-content;
-                font-size: 0.80rem;
-                font-weight: 700;
-                padding: 0.28rem 0.55rem;
-                border-radius: 999px;
-                margin-top: 0.10rem;
-            }}
-
-            .kpi-delta.pos {{
-                background-color: rgba(22, 163, 74, 0.10);
-                color: #15803d;
-            }}
-
-            .kpi-delta.neg {{
-                background-color: rgba(220, 38, 38, 0.10);
-                color: #b91c1c;
-            }}
-
-            .kpi-delta.neu {{
-                background-color: rgba(100, 116, 139, 0.10);
-                color: #475569;
-            }}
-
-            .kpi-caption {{
-                font-size: 0.78rem;
-                color: #64748b;
-                margin-top: 0.65rem;
-                line-height: 1.35;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="kpi-card">
-            <div>
-                <div class="kpi-label">{title}</div>
-                <div class="kpi-value">{value}</div>
-                {delta_html}
-            </div>
-            <div class="kpi-caption">{caption}</div>
-        </div>
-    </body>
-    </html>
-    """
-
-    components.html(html, height=145)
+    return fig
 
 
 def ensure_dataframe(obj):
@@ -210,17 +125,68 @@ def format_weights_df(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-inject_kpi_cards_css()
+def interpret_kpis(n_assets, n_obs, n_portfolios, rf_annual):
+    return (
+        f"Se analizaron {n_assets} activos con {n_obs} observaciones alineadas y se simularon "
+        f"{n_portfolios:,} portafolios usando una tasa libre de riesgo de {rf_annual:.2%}."
+    ).replace(",", ".")
 
-st.title("Módulo 6 - Optimización de portafolio (Markowitz)")
-st.caption("Explora portafolios eficientes, diversificación, relación riesgo-retorno y soluciones óptimas bajo Markowitz.")
+
+def interpret_optimal_portfolios(min_var_return, min_var_vol, max_sharpe_return, max_sharpe_ratio):
+    parts = []
+
+    if min_var_return is not None and min_var_vol is not None:
+        parts.append(
+            f"El portafolio de mínima varianza ofrece un retorno esperado de {float(min_var_return):.2%} "
+            f"con volatilidad de {float(min_var_vol):.2%}"
+        )
+
+    if max_sharpe_return is not None and max_sharpe_ratio is not None:
+        parts.append(
+            f"mientras que el portafolio de máximo Sharpe alcanza un retorno esperado de {float(max_sharpe_return):.2%} "
+            f"con ratio Sharpe de {float(max_sharpe_ratio):.3f}"
+        )
+
+    text = ". ".join(parts).strip()
+    if not text:
+        return "No fue posible construir una interpretación automática de los portafolios óptimos."
+    return text + "." if not text.endswith(".") else text
+
+
+def interpret_correlation():
+    return "La matriz de correlación ayuda a identificar qué tan parecidos son los movimientos entre activos. Correlaciones más bajas suelen mejorar el potencial de diversificación del portafolio."
+
+
+def interpret_frontier():
+    return "La frontera eficiente resume las mejores combinaciones riesgo-retorno encontradas. Los portafolios destacados permiten comparar estabilidad, eficiencia y metas de rentabilidad."
+
+
+def build_target_weights_df(returns: pd.DataFrame, weights: np.ndarray) -> pd.DataFrame:
+    out = pd.DataFrame(
+        {
+            "Activo": returns.columns,
+            "Peso": np.round(weights, 4),
+        }
+    )
+    out["Participación"] = out["Peso"].map(lambda x: f"{x:.2%}")
+    return out.sort_values("Peso", ascending=False).reset_index(drop=True)
+
 
 # ==============================
-# Sidebar
+# SETUP GLOBAL
 # ==============================
-with st.sidebar:
-    st.header("Parámetros de optimización")
+modo, filtros_sidebar = setup_dashboard_page(
+    title="Dashboard Riesgo",
+    subtitle="Universidad Santo Tomás",
+    modo_default="General",
+    filtros_label="Parámetros De Optimización",
+    filtros_expanded=False,
+)
 
+# ==============================
+# SIDEBAR
+# ==============================
+with filtros_sidebar:
     horizonte = st.selectbox(
         "Horizonte de análisis",
         [
@@ -233,6 +199,7 @@ with st.sidebar:
             "Personalizado",
         ],
         index=3,
+        key="mk_horizonte",
     )
 
     fecha_fin_ref = pd.to_datetime(DEFAULT_END_DATE)
@@ -256,48 +223,52 @@ with st.sidebar:
         start_date = (fecha_fin_ref - pd.DateOffset(years=5)).date()
         end_date = fecha_fin_ref.date()
     else:
-        start_date = st.date_input("Fecha inicial", value=DEFAULT_START_DATE, key="mk_start")
-        end_date = st.date_input("Fecha final", value=DEFAULT_END_DATE, key="mk_end")
+        c1, c2 = st.columns(2)
+        with c1:
+            start_date = st.date_input("Fecha inicial", value=DEFAULT_START_DATE, key="mk_start")
+        with c2:
+            end_date = st.date_input("Fecha final", value=DEFAULT_END_DATE, key="mk_end")
 
-    st.divider()
-    st.subheader("Modo de visualización")
-    modo = st.radio(
-        "Selecciona el nivel de detalle",
-        ["General", "Estadístico"],
-        index=0,
-    )
+    mostrar_tablas = st.checkbox("Mostrar tablas completas", value=False, key="mk_show_tables")
 
-    st.divider()
-    st.subheader("Opciones de visualización")
-
-    mostrar_tablas = st.checkbox("Mostrar tablas completas", value=False)
-
-    mostrar_detalle_correlacion = False
-    mostrar_interpretacion_tecnica = False
-
-    with st.expander("Filtros secundarios"):
+    with st.expander("Filtros secundarios", expanded=False):
         n_portfolios = st.slider(
             "Número de portafolios",
             min_value=5000,
             max_value=50000,
             value=10000,
             step=5000,
+            key="mk_n_portfolios",
         )
 
-        target_return = st.slider(
-            "Retorno objetivo (%)",
+        target_return_pct = st.number_input(
+            "Retorno anual objetivo del portafolio (%)",
             min_value=0.0,
-            max_value=0.30,
-            value=0.10,
-            step=0.01,
+            max_value=30.0,
+            value=10.0,
+            step=0.5,
+            key="mk_target_return_pct",
+            help="Ingresa el retorno objetivo en porcentaje. Ejemplo: 10 equivale a 10%.",
         )
+        target_return = target_return_pct / 100
 
         if modo == "Estadístico":
-            mostrar_detalle_correlacion = st.checkbox("Mostrar matriz de correlación tabular", value=False)
-            mostrar_interpretacion_tecnica = st.checkbox("Mostrar interpretación técnica", value=True)
+            mostrar_detalle_correlacion = st.checkbox(
+                "Mostrar matriz de correlación tabular",
+                value=False,
+                key="mk_show_corr_table",
+            )
+            mostrar_interpretacion_tecnica = st.checkbox(
+                "Mostrar interpretación técnica",
+                value=True,
+                key="mk_show_tech_interp",
+            )
+        else:
+            mostrar_detalle_correlacion = False
+            mostrar_interpretacion_tecnica = False
 
 # ==============================
-# Carga de datos
+# CARGA DE DATOS
 # ==============================
 tickers = [meta["ticker"] for meta in ASSETS.values()]
 bundle = load_market_bundle(tickers=tickers, start=str(start_date), end=str(end_date))
@@ -324,7 +295,7 @@ rf_annual = (
 )
 
 # ==============================
-# Simulación y soluciones óptimas
+# SIMULACIÓN Y SOLUCIONES ÓPTIMAS
 # ==============================
 sim_df = simulate_portfolios(returns, rf_annual=rf_annual, n_portfolios=n_portfolios)
 
@@ -354,38 +325,49 @@ if min_var_df.empty or max_sharpe_df.empty:
 
 min_var_weights_df = format_weights_df(weights_table(min_var))
 max_sharpe_weights_df = format_weights_df(weights_table(max_sharpe))
+corr = returns.corr()
 
 # ==============================
-# Resumen
+# HEADER
 # ==============================
-st.markdown("### Resumen del módulo")
+header_dashboard(
+    "Módulo 6 - Optimización de portafolio (Markowitz)",
+    "Explora portafolios eficientes, diversificación, relación riesgo-retorno y soluciones óptimas bajo Markowitz",
+    modo=modo,
+)
+
 if modo == "General":
-    st.write(
-        """
-        Este módulo construye múltiples combinaciones de portafolios para identificar aquellas que ofrecen
-        una mejor relación entre **retorno esperado** y **riesgo**. Se resaltan el portafolio de
-        **mínima varianza**, el de **máximo Sharpe** y una solución con **retorno objetivo**.
-        """
+    nota("Este módulo compara combinaciones de portafolios para mostrar cómo cambia el equilibrio entre retorno esperado y riesgo.")
+else:
+    nota("En modo estadístico se enfatiza el enfoque media-varianza, la frontera eficiente, el Sharpe y la sensibilidad de la solución a un retorno objetivo.")
+
+# ==============================
+# RESUMEN
+# ==============================
+seccion("Resumen Del Módulo")
+
+if modo == "General":
+    nota(
+        "Este módulo construye múltiples combinaciones de portafolios para identificar aquellas que ofrecen una mejor relación entre retorno esperado y riesgo. Se resaltan el portafolio de mínima varianza, el de máximo Sharpe y una solución con retorno objetivo."
     )
 else:
-    st.write(
-        """
-        Este módulo implementa el enfoque media-varianza de **Markowitz**, simulando portafolios factibles
-        para aproximar la frontera eficiente, identificar el portafolio de **mínima varianza**, el de
-        **máximo Sharpe** y resolver una optimización condicionada a un **retorno objetivo**.
-        """
+    nota(
+        "Este módulo implementa el enfoque media-varianza de Markowitz, simulando portafolios factibles para aproximar la frontera eficiente, identificar el portafolio de mínima varianza, el de máximo Sharpe y resolver una optimización condicionada a un retorno objetivo."
     )
 
-st.caption(f"Periodo analizado: {start_date} a {end_date}")
+# ==============================
+# TABS
+# ==============================
+tab1, tab2, tab3 = st.tabs([
+    "Portafolios destacados",
+    "Gráficas",
+    "Composición óptima",
+])
 
 # ==============================
-# KPIs principales
+# KPIS PRINCIPALES
 # ==============================
-st.markdown("### KPIs del módulo")
-section_intro(
-    "Resumen ejecutivo de optimización",
-    "Aquí se resume el universo analizado, el tamaño de la simulación y las características centrales de las soluciones óptimas.",
-)
+seccion("KPIs Del Módulo")
 
 n_assets = returns.shape[1]
 n_obs = returns.shape[0]
@@ -399,265 +381,339 @@ max_sharpe_ratio = safe_get_first(max_sharpe, "sharpe")
 c1, c2, c3, c4 = st.columns(4)
 
 with c1:
-    kpi_card(
+    tarjeta_kpi(
         "Activos analizados",
         str(n_assets),
-        caption="Número de activos incluidos en el universo",
+        help_text="Número de activos incluidos en el universo de optimización.",
+        subtexto="Universo usado para construir combinaciones factibles.",
     )
 
 with c2:
-    kpi_card(
+    tarjeta_kpi(
         "Observaciones",
         str(n_obs),
-        caption="Cantidad de retornos alineados utilizados",
+        help_text="Cantidad de rendimientos alineados usados en la estimación.",
+        subtexto="Muestra histórica disponible para covarianzas y retornos.",
     )
 
 with c3:
-    kpi_card(
+    tarjeta_kpi(
         "Portafolios simulados",
         f"{n_portfolios:,}".replace(",", "."),
-        caption="Combinaciones generadas para aproximar la frontera",
+        help_text="Combinaciones generadas para aproximar la frontera eficiente.",
+        subtexto="Exploración aleatoria del espacio riesgo-retorno.",
     )
 
 with c4:
-    kpi_card(
+    tarjeta_kpi(
         "Tasa libre de riesgo",
         f"{rf_annual:.2%}",
-        caption="Usada para el cálculo del ratio Sharpe",
+        help_text="Usada para calcular el ratio Sharpe.",
+        subtexto="Referencia para medir eficiencia ajustada por riesgo.",
     )
+
+plot_card_footer(interpret_kpis(n_assets, n_obs, n_portfolios, rf_annual))
 
 # ==============================
-# Portafolios óptimos
+# TAB 1
 # ==============================
-st.markdown("### Portafolios destacados")
-section_intro(
-    "Soluciones óptimas del modelo",
-    "Se comparan los portafolios más relevantes de la optimización: el más defensivo y el más eficiente.",
-)
+with tab1:
+    seccion("Portafolios Destacados")
 
-c5, c6, c7, c8 = st.columns(4)
+    c5, c6, c7, c8 = st.columns(4)
 
-with c5:
-    kpi_card(
-        "Retorno mín. varianza",
-        f"{float(min_var_return):.2%}" if min_var_return is not None else "N/D",
-        caption="Retorno esperado del portafolio más estable",
-    )
-
-with c6:
-    kpi_card(
-        "Volatilidad mín. varianza",
-        f"{float(min_var_vol):.2%}" if min_var_vol is not None else "N/D",
-        delta="Menor riesgo disponible",
-        delta_type="pos",
-        caption="Portafolio con la menor volatilidad estimada",
-    )
-
-with c7:
-    kpi_card(
-        "Retorno máx. Sharpe",
-        f"{float(max_sharpe_return):.2%}" if max_sharpe_return is not None else "N/D",
-        caption="Retorno esperado del portafolio más eficiente",
-    )
-
-with c8:
-    kpi_card(
-        "Sharpe máximo",
-        f"{float(max_sharpe_ratio):.3f}" if max_sharpe_ratio is not None else "N/D",
-        delta="Mejor eficiencia riesgo-retorno",
-        delta_type="pos",
-        caption="Portafolio con mayor ratio Sharpe",
-    )
-
-# ==============================
-# Correlación
-# ==============================
-corr = returns.corr()
-
-st.markdown("### Matriz de correlación")
-section_intro(
-    "Relación entre activos",
-    "La matriz de correlación ayuda a entender el potencial de diversificación entre los activos del portafolio.",
-)
-
-st.plotly_chart(plot_correlation_heatmap(corr), width="stretch")
-
-if modo == "General":
-    st.info(
-        """
-        **Cómo leer esta matriz**
-
-        - Correlaciones altas indican que dos activos tienden a moverse de forma parecida.
-        - Correlaciones más bajas o moderadas ayudan a diversificar.
-        - En Markowitz, la diversificación es clave para reducir volatilidad agregada.
-        """
-    )
-else:
-    if mostrar_detalle_correlacion:
-        with st.expander("Ver matriz de correlación en tabla"):
-            st.dataframe(corr.round(4), width="stretch")
-
-        st.info(
-            """
-            En términos de media-varianza, la matriz de correlación es fundamental porque determina cuánto riesgo
-            conjunto puede reducirse mediante diversificación. Correlaciones menores tienden a ampliar el espacio
-            de portafolios eficientes.
-            """
+    with c5:
+        tarjeta_kpi(
+            "Retorno mín. varianza",
+            f"{float(min_var_return):.2%}" if min_var_return is not None else "N/D",
+            help_text="Retorno esperado del portafolio más estable.",
+            subtexto="Rentabilidad asociada a la cartera de menor volatilidad.",
         )
 
-# ==============================
-# Frontera eficiente
-# ==============================
-st.markdown("### Frontera eficiente")
-section_intro(
-    "Relación riesgo-retorno",
-    "El gráfico resume el espacio de portafolios posibles y destaca la frontera eficiente junto con las soluciones óptimas.",
-)
-
-st.plotly_chart(plot_frontier(sim_df, frontier_df, min_var, max_sharpe), width="stretch")
-
-if modo == "General":
-    st.info(
-        """
-        **Cómo leer este gráfico**
-
-        - Cada punto representa un portafolio posible.
-        - La frontera eficiente reúne las mejores combinaciones para cada nivel de riesgo.
-        - El portafolio de mínima varianza minimiza volatilidad.
-        - El portafolio de máximo Sharpe maximiza eficiencia entre retorno esperado y riesgo.
-        """
-    )
-else:
-    with st.expander("Ver interpretación técnica de la frontera eficiente"):
-        st.write(
-            """
-            La nube de portafolios representa combinaciones factibles generadas por simulación. La frontera eficiente
-            aproxima el conjunto de soluciones dominantes en el espacio media-varianza. El portafolio de mínima varianza
-            resuelve el problema de minimización del riesgo, mientras que el de máximo Sharpe maximiza la pendiente de
-            la línea de asignación de capital dada la tasa libre de riesgo.
-            """
+    with c6:
+        tarjeta_kpi(
+            "Volatilidad mín. varianza",
+            f"{float(min_var_vol):.2%}" if min_var_vol is not None else "N/D",
+            "Menor riesgo disponible",
+            help_text="Portafolio con menor volatilidad estimada.",
+            subtexto="Nivel mínimo de riesgo dentro del conjunto simulado.",
         )
 
-# ==============================
-# Pesos de portafolios óptimos
-# ==============================
-st.markdown("### Composición de portafolios óptimos")
-section_intro(
-    "Pesos recomendados",
-    "Estas tablas muestran cómo se distribuye la participación de cada activo en las soluciones óptimas principales.",
-)
+    with c7:
+        tarjeta_kpi(
+            "Retorno máx. Sharpe",
+            f"{float(max_sharpe_return):.2%}" if max_sharpe_return is not None else "N/D",
+            help_text="Retorno esperado del portafolio más eficiente.",
+            subtexto="Rentabilidad esperada del mejor balance riesgo-retorno.",
+        )
 
-col1, col2 = st.columns(2)
+    with c8:
+        tarjeta_kpi(
+            "Sharpe máximo",
+            f"{float(max_sharpe_ratio):.3f}" if max_sharpe_ratio is not None else "N/D",
+            "Mejor eficiencia riesgo-retorno",
+            help_text="Portafolio con mayor ratio Sharpe.",
+            subtexto="Exceso de retorno por unidad de volatilidad.",
+        )
 
-with col1:
-    st.subheader("Portafolio de mínima varianza")
-    st.dataframe(
-        min_var_weights_df,
-        width="stretch",
-        hide_index=True,
+    plot_card_footer(
+        interpret_optimal_portfolios(
+            min_var_return, min_var_vol, max_sharpe_return, max_sharpe_ratio
+        )
     )
 
-with col2:
-    st.subheader("Portafolio de máximo Sharpe")
-    st.dataframe(
-        max_sharpe_weights_df,
-        width="stretch",
-        hide_index=True,
-    )
+# ==============================
+# TAB 2
+# ==============================
+with tab2:
+    seccion("Visualizaciones De Optimización")
 
-if mostrar_tablas:
-    with st.expander("Ver tablas completas de pesos y resultados"):
-        st.markdown("#### Portafolio de mínima varianza")
-        st.dataframe(min_var_df, width="stretch", hide_index=True)
-        st.markdown("#### Portafolio de máximo Sharpe")
-        st.dataframe(max_sharpe_df, width="stretch", hide_index=True)
+    col_g1, col_g2 = st.columns(2, gap="large")
+
+    with col_g1:
+        plot_card_header(
+            "Matriz de correlación",
+            "La matriz de correlación ayuda a entender el potencial de diversificación entre los activos del portafolio.",
+            modo=modo,
+            caption="Activa o desactiva detalles para simplificar la lectura visual de la matriz.",
+        )
+
+        toolbar_label("Opciones de visualización")
+        cg1, cg2 = st.columns(2)
+        with cg1:
+            clean_corr = st.checkbox("Vista limpia", value=False, key="mk_clean_corr")
+        with cg2:
+            show_corr_table_local = st.checkbox(
+                "Ver tabla de correlación",
+                value=mostrar_detalle_correlacion,
+                key="mk_corr_table_local",
+            )
+
+        fig_corr = plot_correlation_heatmap(corr)
+        fig_corr = style_plot(fig_corr, modo)
+        fig_corr.update_layout(
+            title=dict(
+                text="Matriz De Correlación",
+                x=0.03,
+                xanchor="left",
+                y=0.97,
+                yanchor="top",
+                font=dict(size=16, color="#0F172A"),
+            ),
+            margin=dict(l=20, r=20, t=70, b=20),
+        )
+        fig_corr.update_xaxes(tickfont=dict(size=11, color="#334155"))
+        fig_corr.update_yaxes(tickfont=dict(size=11, color="#334155"))
+
+        if clean_corr:
+            try:
+                fig_corr.update_layout(coloraxis_showscale=False)
+            except Exception:
+                pass
+
+        st.plotly_chart(fig_corr, use_container_width=True)
+        plot_card_footer(interpret_correlation())
+
+        if show_corr_table_local:
+            st.dataframe(corr.round(4), use_container_width=True)
+
+    with col_g2:
+        plot_card_header(
+            "Frontera eficiente",
+            "El gráfico resume el espacio de portafolios posibles y destaca la frontera eficiente junto con las soluciones óptimas.",
+            modo=modo,
+            caption="Mejoré leyenda, ejes y contraste para una lectura más clara.",
+        )
+
+        toolbar_label("Capas del gráfico")
+        fg1, fg2, fg3, fg4 = st.columns(4)
+        with fg1:
+            show_cloud = st.checkbox("Nube", value=True, key="mk_show_cloud")
+        with fg2:
+            show_frontier = st.checkbox("Frontera", value=True, key="mk_show_frontier")
+        with fg3:
+            show_optima = st.checkbox("Óptimos", value=True, key="mk_show_optima")
+        with fg4:
+            clean_frontier = st.checkbox("Vista limpia", value=False, key="mk_clean_frontier")
+
+        fig_frontier = plot_frontier(sim_df, frontier_df, min_var, max_sharpe)
+        fig_frontier = style_plot(fig_frontier, modo)
+        fig_frontier.update_layout(
+            title=dict(
+                text="Frontera Eficiente",
+                x=0.03,
+                xanchor="left",
+                y=0.97,
+                yanchor="top",
+                font=dict(size=16, color="#0F172A"),
+            ),
+            margin=dict(l=20, r=20, t=70, b=20),
+        )
+        fig_frontier.update_xaxes(
+            title_font=dict(size=14, color="#0F172A"),
+            tickfont=dict(size=12, color="#334155"),
+        )
+        fig_frontier.update_yaxes(
+            title_font=dict(size=14, color="#0F172A"),
+            tickfont=dict(size=12, color="#334155"),
+        )
+
+        for trace in fig_frontier.data:
+            trace_name = str(getattr(trace, "name", "") or "").lower()
+
+            if any(k in trace_name for k in ["sim", "cloud", "nube", "portfolio", "portafolio"]):
+                trace.visible = True if show_cloud else "legendonly"
+                try:
+                    if hasattr(trace, "marker"):
+                        trace.marker.color = "#7DD3FC" if modo == "General" else "#F9A8D4"
+                        trace.marker.opacity = 0.38
+                        trace.marker.size = 6
+                    if hasattr(trace, "line"):
+                        trace.line.color = "#7DD3FC" if modo == "General" else "#F9A8D4"
+                except Exception:
+                    pass
+
+            elif any(k in trace_name for k in ["frontier", "frontera", "efficient"]):
+                trace.visible = True if show_frontier else "legendonly"
+                try:
+                    trace.line.color = "#D97706" if modo == "General" else "#BE123C"
+                    trace.line.width = 4.8
+                    trace.line.dash = "solid"
+                except Exception:
+                    pass
+
+            elif any(k in trace_name for k in ["min", "sharpe", "ópt", "opt"]):
+                trace.visible = True if show_optima else "legendonly"
+                try:
+                    if hasattr(trace, "marker"):
+                        trace.marker.size = 11
+                    if "min" in trace_name:
+                        trace.marker.color = "#F97316"
+                    elif "sharpe" in trace_name:
+                        trace.marker.color = "#2563EB" if modo == "General" else "#7C3AED"
+                except Exception:
+                    pass
+
+        try:
+            fig_frontier.update_layout(
+                legend=dict(
+                    font=dict(size=11, color="#334155"),
+                    bgcolor="rgba(255,255,255,0.92)",
+                    bordercolor="rgba(148, 163, 184, 0.22)",
+                    borderwidth=1,
+                )
+            )
+        except Exception:
+            pass
+
+        if clean_frontier:
+            try:
+                fig_frontier.update_layout(showlegend=False)
+            except Exception:
+                pass
+
+        st.plotly_chart(fig_frontier, use_container_width=True)
+        plot_card_footer(interpret_frontier())
 
 # ==============================
-# Optimización con retorno objetivo
+# TAB 3
 # ==============================
-st.markdown("### Optimización con retorno objetivo")
-section_intro(
-    "Solución condicionada",
-    "Aquí se busca un portafolio que cumpla un retorno objetivo específico sujeto a las restricciones del modelo.",
-)
+with tab3:
+    seccion("Composición De Portafolios Óptimos")
 
-result = optimize_target_return(returns, target_return)
+    col1, col2 = st.columns(2)
 
-if result is not None:
-    target_delta = None
-    target_delta_type = "neu"
-
-    if result["return"] >= target_return:
-        target_delta = "Objetivo alcanzado"
-        target_delta_type = "pos"
-    else:
-        target_delta = "Cercano al objetivo"
-        target_delta_type = "neu"
-
-    col3, col4 = st.columns([1, 1.2])
-
-    with col3:
-        kpi_card(
-            "Retorno esperado",
-            f"{result['return']:.2%}",
-            delta=target_delta,
-            delta_type=target_delta_type,
-            caption=f"Objetivo solicitado: {target_return:.2%}",
+    with col1:
+        plot_card_header(
+            "Portafolio de mínima varianza",
+            "Muestra la distribución de pesos del portafolio con menor volatilidad estimada.",
+            modo=modo,
+            caption="Ordenado de mayor a menor participación.",
         )
-
-        kpi_card(
-            "Volatilidad",
-            f"{result['volatility']:.2%}",
-            caption="Riesgo estimado de la solución encontrada",
-        )
-
-    with col4:
-        st.markdown("#### Pesos del portafolio objetivo")
-        target_weights_df = pd.DataFrame(
-            {
-                "Activo": returns.columns,
-                "Peso": np.round(result["weights"], 4),
-            }
-        )
-        target_weights_df["Participación"] = target_weights_df["Peso"].map(lambda x: f"{x:.2%}")
-        target_weights_df = target_weights_df.sort_values("Peso", ascending=False).reset_index(drop=True)
-
         st.dataframe(
-            target_weights_df,
-            width="stretch",
+            min_var_weights_df,
+            use_container_width=True,
             hide_index=True,
         )
 
-else:
-    st.warning("No se pudo encontrar solución para ese nivel de retorno.")
+    with col2:
+        plot_card_header(
+            "Portafolio de máximo Sharpe",
+            "Muestra la distribución de pesos del portafolio con mejor eficiencia riesgo-retorno.",
+            modo=modo,
+            caption="Ordenado de mayor a menor participación.",
+        )
+        st.dataframe(
+            max_sharpe_weights_df,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    if mostrar_tablas:
+        with st.expander("Ver tablas completas de pesos y resultados"):
+            st.markdown("#### Portafolio de mínima varianza")
+            st.dataframe(min_var_df, use_container_width=True, hide_index=True)
+            st.markdown("#### Portafolio de máximo Sharpe")
+            st.dataframe(max_sharpe_df, use_container_width=True, hide_index=True)
+
+    seccion("Optimización Con Retorno Objetivo")
+
+    plot_card_header(
+        "Solución condicionada",
+        "Aquí se busca un portafolio que cumpla un retorno objetivo específico sujeto a las restricciones del modelo.",
+        modo=modo,
+        caption=f"Retorno objetivo configurado actualmente: {target_return:.2%}",
+    )
+
+    if target_return == 0:
+        nota(
+            "Un retorno objetivo de 0% no implica pesos iguales a cero. Bajo la formulación actual, el modelo sigue buscando una cartera completamente invertida cuya rentabilidad esperada sea cercana a 0%. Para representar 'no invertir' sería necesario incluir explícitamente cash o capital no asignado."
+        )
+
+    result = optimize_target_return(returns, target_return)
+
+    if result is not None:
+        target_delta = "Objetivo alcanzado" if result["return"] >= target_return else "Cercano al objetivo"
+
+        col3, col4 = st.columns([1, 1.2])
+
+        with col3:
+            tarjeta_kpi(
+                "Retorno esperado",
+                f"{result['return']:.2%}",
+                target_delta,
+                help_text=f"Objetivo solicitado: {target_return:.2%}",
+                subtexto="Rentabilidad estimada de la solución condicionada.",
+            )
+
+            tarjeta_kpi(
+                "Volatilidad",
+                f"{result['volatility']:.2%}",
+                help_text="Riesgo estimado de la solución encontrada.",
+                subtexto="Riesgo asociado al retorno objetivo impuesto.",
+            )
+
+        with col4:
+            target_weights_df = build_target_weights_df(returns, result["weights"])
+            st.dataframe(
+                target_weights_df,
+                use_container_width=True,
+                hide_index=True,
+            )
+    else:
+        st.warning("No se pudo encontrar solución para ese nivel de retorno.")
 
 # ==============================
-# Interpretación
+# INTERPRETACIÓN
 # ==============================
-st.markdown("### Interpretación")
+seccion("Interpretación")
 
 if modo == "General":
-    st.success(
-        """
-        **Lectura sencilla**
-
-        - Este módulo muestra que no existe una única mejor cartera: todo depende del equilibrio entre retorno y riesgo.
-        - La frontera eficiente resume las combinaciones más convenientes.
-        - El portafolio de mínima varianza prioriza estabilidad.
-        - El portafolio de máximo Sharpe prioriza eficiencia.
-        - El portafolio con retorno objetivo adapta la solución a una meta concreta.
-        """
+    nota(
+        "Este módulo muestra que no existe una única mejor cartera: todo depende del equilibrio entre retorno y riesgo. La frontera eficiente resume las combinaciones más convenientes, mientras que mínima varianza, máximo Sharpe y retorno objetivo representan decisiones distintas dentro del mismo problema."
     )
 else:
     if mostrar_interpretacion_tecnica:
-        st.info(
-            """
-            **Interpretación técnica**
-
-            - El enfoque de Markowitz modela el problema de asignación óptima en términos de media y varianza.
-            - La frontera eficiente representa el conjunto de portafolios no dominados.
-            - El portafolio de mínima varianza minimiza el riesgo total sujeto a las restricciones del problema.
-            - El portafolio de máximo Sharpe maximiza el exceso de retorno por unidad de riesgo.
-            - La solución con retorno objetivo impone una restricción adicional sobre la rentabilidad esperada, lo que puede incrementar la volatilidad necesaria para alcanzar dicha meta.
-            """
+        nota(
+            "El enfoque de Markowitz modela la asignación óptima en términos de media y varianza. La frontera eficiente representa portafolios no dominados, el portafolio de mínima varianza minimiza el riesgo total, el de máximo Sharpe maximiza el exceso de retorno por unidad de riesgo y la solución con retorno objetivo impone una restricción adicional que puede exigir mayor volatilidad para alcanzar la meta."
         )
