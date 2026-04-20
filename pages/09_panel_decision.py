@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, Optional
+
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -11,17 +13,31 @@ from ui.dashboard_ui import (
     seccion,
     nota,
     tarjeta_kpi,
+    plot_card_header,
     plot_card_footer,
+    toolbar_label,
 )
 
-from src.config import ASSETS, DEFAULT_START_DATE, DEFAULT_END_DATE, ensure_project_dirs
+from src.config import (
+    ASSETS,
+    GLOBAL_BENCHMARK,
+    DEFAULT_START_DATE,
+    DEFAULT_END_DATE,
+    ensure_project_dirs,
+)
 from src.download import load_market_bundle, download_single_ticker
-from src.preprocess import equal_weight_portfolio
-from src.risk_metrics import risk_comparison_table, validar_serie_para_garch
-from src.garch_models import fit_garch_models
-from src.benchmark import benchmark_summary
 from src.indicators import compute_all_indicators
 from src.signals import evaluate_signals
+from src.garch_models import fit_garch_models
+from src.risk_metrics import risk_comparison_table, validar_serie_para_garch
+from src.benchmark import benchmark_summary
+from src.plots import plot_benchmark_base100
+from src.decision_engine import (
+    DecisionEngineInputs,
+    EngineDependencies,
+    build_portfolio_weights,
+    run_decision_engine,
+)
 
 try:
     from src.api.macro import macro_snapshot
@@ -29,6 +45,588 @@ except Exception:
     macro_snapshot = None
 
 ensure_project_dirs()
+
+
+# ==============================
+# HELPERS VISUALES
+# ==============================
+def style_plot(fig, modo: str):
+    font_color = "#5B2132" if modo == "Estadístico" else "#334155"
+    grid_color = "rgba(148, 163, 184, 0.16)"
+    axis_title = "#0F172A"
+    tick_color = "#334155"
+    legend_font = "#334155" if modo == "General" else "#5B2132"
+
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color=font_color, size=12),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
+            bgcolor="rgba(255,255,255,0.88)",
+            bordercolor="rgba(148, 163, 184, 0.22)",
+            borderwidth=1,
+            font=dict(color=legend_font, size=11),
+        ),
+        margin=dict(l=20, r=20, t=70, b=20),
+        hoverlabel=dict(
+            font_size=12,
+            bgcolor="#FFFFFF",
+            font_color="#0F172A",
+        ),
+    )
+
+    fig.update_xaxes(
+        showgrid=True,
+        gridcolor=grid_color,
+        zeroline=False,
+        tickfont=dict(color=tick_color, size=12),
+        title_font=dict(color=axis_title, size=14, family="Inter, sans-serif"),
+    )
+    fig.update_yaxes(
+        showgrid=True,
+        gridcolor=grid_color,
+        zeroline=False,
+        tickfont=dict(color=tick_color, size=12),
+        title_font=dict(color=axis_title, size=14, family="Inter, sans-serif"),
+    )
+    return fig
+
+
+def safe_metric(df: pd.DataFrame, filter_col: str, filter_val: str, value_col: str) -> Optional[float]:
+    try:
+        return float(df.loc[df[filter_col] == filter_val, value_col].iloc[0])
+    except Exception:
+        return None
+
+
+def delta_label(value, positive_text, negative_text, neutral_text="Sin cambio"):
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return None
+    if value > 0:
+        return positive_text
+    if value < 0:
+        return negative_text
+    return neutral_text
+
+
+def interpret_macro_context(rf_pct, inflation_yoy, usdcop_market, cop_per_usd):
+    parts = []
+
+    if rf_pct is not None:
+        parts.append(f"la tasa libre de riesgo se ubica en {rf_pct:.2f}%")
+
+    if inflation_yoy is not None:
+        parts.append(f"la inflación interanual se estima en {inflation_yoy:.2%}")
+
+    if usdcop_market is not None and cop_per_usd is not None:
+        if usdcop_market > cop_per_usd:
+            parts.append("el USD/COP spot se encuentra por encima de su promedio anual")
+        elif usdcop_market < cop_per_usd:
+            parts.append("el USD/COP spot se encuentra por debajo de su promedio anual")
+        else:
+            parts.append("el USD/COP spot es similar a su promedio anual")
+
+    if not parts:
+        return "No fue posible construir una lectura automática del contexto macro."
+    return "En el periodo analizado, " + ", ".join(parts) + "."
+
+
+def interpret_relative_performance(ret_port, ret_bench, alpha_jensen, tracking_error):
+    parts = []
+
+    if ret_port is not None and ret_bench is not None:
+        diff_ret = ret_port - ret_bench
+        if diff_ret > 0:
+            parts.append(f"el portafolio superó al benchmark por {diff_ret:.2%}")
+        elif diff_ret < 0:
+            parts.append(f"el portafolio quedó por debajo del benchmark en {abs(diff_ret):.2%}")
+        else:
+            parts.append("el portafolio tuvo un desempeño acumulado similar al benchmark")
+
+    if alpha_jensen is not None:
+        if alpha_jensen > 0:
+            parts.append("el alpha de Jensen fue positivo")
+        elif alpha_jensen < 0:
+            parts.append("el alpha de Jensen fue negativo")
+        else:
+            parts.append("el alpha de Jensen fue cercano a cero")
+
+    if tracking_error is not None:
+        parts.append(f"el tracking error fue de {tracking_error:.4f}")
+
+    if not parts:
+        return "No fue posible construir una interpretación automática del desempeño relativo."
+    return "En síntesis, " + ", ".join(parts) + "."
+
+
+def benchmark_label(tone: str) -> str:
+    mapping = {
+        "positive": "Superior",
+        "slightly_positive": "Levemente superior",
+        "neutral": "No concluyente",
+        "negative": "Inferior",
+    }
+    return mapping.get(str(tone), "No concluyente")
+
+
+def signal_label(tone: str) -> str:
+    mapping = {
+        "strong_positive": "Favorable fuerte",
+        "positive": "Favorable",
+        "neutral": "Neutral",
+        "negative": "Desfavorable",
+        "strong_negative": "Desfavorable fuerte",
+    }
+    return mapping.get(str(tone), "Neutral")
+
+
+def _weighting_label(construction_mode: str) -> str:
+    mapping = {
+        "equal": "Portafolio equiponderado",
+        "manual": "Portafolio con pesos manuales",
+        "min_variance": "Portafolio de mínima varianza",
+        "max_utility": "Portafolio de máxima utilidad",
+    }
+    return mapping.get(construction_mode, "Construcción no especificada")
+
+
+# ==============================
+# HELPERS DE DATOS
+# ==============================
+def _extract_prices_from_bundle(bundle: dict, tickers: list[str]) -> pd.DataFrame:
+    for key in ("prices", "adj_close", "close"):
+        value = bundle.get(key)
+        if isinstance(value, pd.DataFrame) and not value.empty:
+            cols = [c for c in tickers if c in value.columns]
+            if cols:
+                return value[cols].copy()
+    return pd.DataFrame()
+
+
+def _get_macro() -> dict[str, Any]:
+    if macro_snapshot is None:
+        return {}
+    try:
+        snap = macro_snapshot()
+        return snap if isinstance(snap, dict) else {}
+    except Exception:
+        return {}
+
+
+def _get_rf_annual(macro: dict[str, Any]) -> float:
+    try:
+        rf_pct = macro.get("risk_free_rate_pct", np.nan)
+        if pd.notna(rf_pct):
+            return float(rf_pct) / 100.0
+    except Exception:
+        pass
+    return 0.03
+
+
+def _download_benchmark_returns(symbol: str, start_date, end_date) -> Optional[pd.Series]:
+    try:
+        bench_df = yf.download(
+            symbol,
+            start=str(start_date),
+            end=str(end_date),
+            auto_adjust=False,
+            progress=False,
+        )
+        if bench_df.empty:
+            return None
+
+        if isinstance(bench_df.columns, pd.MultiIndex):
+            if ("Adj Close", symbol) in bench_df.columns:
+                prices = bench_df[("Adj Close", symbol)]
+            elif ("Close", symbol) in bench_df.columns:
+                prices = bench_df[("Close", symbol)]
+            else:
+                return None
+        else:
+            if "Adj Close" in bench_df.columns:
+                prices = bench_df["Adj Close"]
+            elif "Close" in bench_df.columns:
+                prices = bench_df["Close"]
+            else:
+                return None
+
+        prices = pd.to_numeric(prices, errors="coerce").dropna()
+        returns = prices.pct_change().dropna()
+        return returns if not returns.empty else None
+    except Exception:
+        return None
+
+
+def _signal_bucket(recommendation: str) -> str:
+    txt = str(recommendation).lower()
+    if "compra" in txt:
+        return "favorable"
+    if "venta" in txt:
+        return "desfavorable"
+    return "neutral"
+
+
+def _make_signal_adapter(start_date, end_date):
+    def _adapter(_prices_df: pd.DataFrame, tickers: list[str]) -> dict[str, Any]:
+        favorables: list[str] = []
+        neutrales: list[str] = []
+        desfavorables: list[str] = []
+        rows: list[dict[str, Any]] = []
+
+        for ticker in tickers:
+            try:
+                df = download_single_ticker(
+                    ticker=ticker,
+                    start=str(start_date),
+                    end=str(end_date),
+                )
+                if df.empty:
+                    rows.append(
+                        {
+                            "Ticker": ticker,
+                            "Recomendación": "Sin datos",
+                            "Bucket": "neutral",
+                            "Detalle": "No hubo datos suficientes para evaluar señales.",
+                        }
+                    )
+                    continue
+
+                indicators_df = compute_all_indicators(df)
+                signal = evaluate_signals(indicators_df) or {}
+                recommendation = str(signal.get("recommendation", "Neutral"))
+                bucket = _signal_bucket(recommendation)
+
+                if bucket == "favorable":
+                    favorables.append(ticker)
+                elif bucket == "desfavorable":
+                    desfavorables.append(ticker)
+                else:
+                    neutrales.append(ticker)
+
+                rows.append(
+                    {
+                        "Ticker": ticker,
+                        "Recomendación": recommendation,
+                        "Bucket": bucket,
+                        "Detalle": signal.get("message", ""),
+                    }
+                )
+            except Exception as exc:
+                rows.append(
+                    {
+                        "Ticker": ticker,
+                        "Recomendación": "No concluyente",
+                        "Bucket": "neutral",
+                        "Detalle": f"Falló la evaluación de señales: {exc}",
+                    }
+                )
+
+        return {
+            "favorables_tickers": favorables,
+            "desfavorables_tickers": desfavorables,
+            "neutrales_tickers": neutrales,
+            "signal_table": pd.DataFrame(rows),
+        }
+
+    return _adapter
+
+
+# ==============================
+# OPTIMIZACIÓN DE PESOS
+# ==============================
+def _project_long_only(raw: np.ndarray, tickers: list[str]) -> pd.Series:
+    s = pd.Series(raw, index=tickers, dtype=float).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    s = s.clip(lower=0.0)
+    total = float(s.sum())
+    if total <= 0:
+        s = pd.Series(1.0 / len(tickers), index=tickers, dtype=float)
+    else:
+        s = s / total
+    return s
+
+
+def _solve_min_variance_weights(returns_df: pd.DataFrame, ridge: float = 1e-6) -> pd.Series:
+    tickers = list(returns_df.columns)
+    cov = returns_df.cov().to_numpy(dtype=float)
+    n = cov.shape[0]
+    cov_reg = cov + ridge * np.eye(n)
+    inv_cov = np.linalg.pinv(cov_reg)
+    ones = np.ones(n)
+    raw = inv_cov @ ones
+    return _project_long_only(raw, tickers)
+
+
+def _solve_max_utility_weights(
+    returns_df: pd.DataFrame,
+    rf_annual: float,
+    utility_focus: float = 0.65,
+    ridge: float = 1e-6,
+) -> pd.Series:
+    tickers = list(returns_df.columns)
+    mu = (returns_df.mean() * 252.0).to_numpy(dtype=float)
+    cov = (returns_df.cov() * 252.0).to_numpy(dtype=float)
+    n = cov.shape[0]
+
+    cov_reg = cov + ridge * np.eye(n)
+    inv_cov = np.linalg.pinv(cov_reg)
+    ones = np.ones(n)
+
+    min_var_raw = inv_cov @ ones
+    utility_raw = inv_cov @ (mu - rf_annual)
+
+    min_var_w = _project_long_only(min_var_raw, tickers)
+    utility_w = _project_long_only(utility_raw, tickers)
+
+    utility_focus = float(np.clip(utility_focus, 0.0, 1.0))
+    blended = utility_focus * utility_w + (1.0 - utility_focus) * min_var_w
+    blended = blended / blended.sum()
+    return blended
+
+
+def _resolve_portfolio_construction(
+    selected_tickers: list[str],
+    returns_df: pd.DataFrame,
+    construction_choice: str,
+    manual_weights_pct: dict[str, float],
+    rf_annual: float,
+    utility_focus: float,
+) -> tuple[str, Optional[dict[str, float]], Optional[dict[str, float]], pd.Series]:
+    if construction_choice == "Equiponderado":
+        weights = build_portfolio_weights(
+            tickers=selected_tickers,
+            mode="equal",
+        )
+        return "equal", None, None, weights
+
+    if construction_choice == "Pesos manuales":
+        raw_sum = float(sum(manual_weights_pct.values()))
+        manual_weights = {
+            ticker: value / raw_sum
+            for ticker, value in manual_weights_pct.items()
+        }
+        weights = build_portfolio_weights(
+            tickers=selected_tickers,
+            mode="manual",
+            manual_weights=manual_weights,
+        )
+        return "manual", manual_weights, None, weights
+
+    if construction_choice == "Mínima varianza":
+        markowitz_series = _solve_min_variance_weights(returns_df[selected_tickers])
+        markowitz_weights = markowitz_series.to_dict()
+        weights = build_portfolio_weights(
+            tickers=selected_tickers,
+            mode="markowitz",
+            markowitz_weights=markowitz_weights,
+        )
+        return "markowitz", None, markowitz_weights, weights
+
+    markowitz_series = _solve_max_utility_weights(
+        returns_df[selected_tickers],
+        rf_annual=rf_annual,
+        utility_focus=utility_focus,
+    )
+    markowitz_weights = markowitz_series.to_dict()
+    weights = build_portfolio_weights(
+        tickers=selected_tickers,
+        mode="markowitz",
+        markowitz_weights=markowitz_weights,
+    )
+    return "markowitz", None, markowitz_weights, weights
+
+
+# ==============================
+# ADAPTADORES DEL MOTOR
+# ==============================
+def _make_var_cvar_adapter(asset_returns_df: pd.DataFrame, weights: pd.Series, n_sim: int):
+    def _adapter(portfolio_returns: pd.Series, confidence_level: float) -> dict[str, Any]:
+        if asset_returns_df.empty:
+            return {
+                "var": np.nan,
+                "cvar": np.nan,
+                "method": "historical",
+                "confidence_level": confidence_level,
+                "comparison_table": pd.DataFrame(),
+            }
+
+        table = risk_comparison_table(
+            portfolio_returns=portfolio_returns,
+            asset_returns_df=asset_returns_df,
+            weights=weights.values,
+            alpha=confidence_level,
+            n_sim=n_sim,
+        )
+
+        if table.empty or "Histórico" not in table["método"].values:
+            return {
+                "var": np.nan,
+                "cvar": np.nan,
+                "method": "historical",
+                "confidence_level": confidence_level,
+                "comparison_table": table,
+            }
+
+        row_hist = table.loc[table["método"] == "Histórico"].iloc[0]
+        return {
+            "var": float(row_hist["VaR_diario"]),
+            "cvar": float(row_hist["CVaR_diario"]),
+            "method": "historical_module",
+            "confidence_level": confidence_level,
+            "comparison_table": table,
+        }
+
+    return _adapter
+
+
+def _garch_adapter(portfolio_returns: pd.Series) -> dict[str, Any]:
+    validation = validar_serie_para_garch(portfolio_returns, min_obs=120, max_null_ratio=0.05)
+    if not validation.get("ok", False):
+        return {
+            "comparison": pd.DataFrame(),
+            "diagnostics": pd.DataFrame(),
+            "summary_text": validation.get(
+                "message",
+                "No hay condiciones suficientes para estimar GARCH.",
+            ),
+            "persistencia": np.nan,
+        }
+
+    serie_garch = validation["serie_limpia"] * 100.0
+    results = fit_garch_models(serie_garch)
+
+    diagnostics = results.get("diagnostics", pd.DataFrame())
+    persistencia = np.nan
+    if not diagnostics.empty:
+        mask = diagnostics["metrica"] == "persistencia_alpha_mas_beta"
+        if mask.any():
+            persistencia = pd.to_numeric(
+                diagnostics.loc[mask, "valor"],
+                errors="coerce",
+            ).iloc[0]
+
+    results["persistencia"] = persistencia
+    return results
+
+
+def _make_benchmark_adapter(rf_annual: float):
+    def _adapter(portfolio_returns: pd.Series, benchmark_returns: Optional[pd.Series]) -> dict[str, Any]:
+        if benchmark_returns is None or len(benchmark_returns) == 0:
+            return {
+                "benchmark_available": False,
+                "tone": "neutral",
+                "score": 50.0,
+                "summary_text": "No hay benchmark disponible para comparación relativa.",
+                "summary_df": pd.DataFrame(),
+                "extras_df": pd.DataFrame(),
+                "alpha_jensen": np.nan,
+                "tracking_error": np.nan,
+                "information_ratio": np.nan,
+                "max_drawdown": np.nan,
+            }
+
+        try:
+            summary_df, extras_df, _, _ = benchmark_summary(
+                portfolio_returns=portfolio_returns,
+                benchmark_returns=benchmark_returns,
+                rf_annual=rf_annual,
+            )
+        except Exception as exc:
+            return {
+                "benchmark_available": False,
+                "tone": "neutral",
+                "score": 50.0,
+                "summary_text": f"No fue posible construir el benchmark: {exc}",
+                "summary_df": pd.DataFrame(),
+                "extras_df": pd.DataFrame(),
+                "alpha_jensen": np.nan,
+                "tracking_error": np.nan,
+                "information_ratio": np.nan,
+                "max_drawdown": np.nan,
+            }
+
+        alpha_jensen = safe_metric(extras_df, "métrica", "Alpha de Jensen", "valor")
+        tracking_error = safe_metric(extras_df, "métrica", "Tracking Error", "valor")
+        information_ratio = safe_metric(extras_df, "métrica", "Information Ratio", "valor")
+        max_drawdown = safe_metric(extras_df, "métrica", "Máximo drawdown", "valor")
+
+        port_ret = safe_metric(summary_df, "serie", "Portafolio", "ret_acumulado")
+        bench_ret = safe_metric(summary_df, "serie", "Benchmark", "ret_acumulado")
+
+        if port_ret is not None and bench_ret is not None and port_ret > bench_ret and (alpha_jensen is None or alpha_jensen >= 0):
+            tone = "positive"
+            score = 78.0
+            summary_text = "El portafolio muestra una lectura relativa favorable frente al benchmark."
+        elif port_ret is not None and bench_ret is not None and port_ret < bench_ret and (alpha_jensen is None or alpha_jensen < 0):
+            tone = "negative"
+            score = 24.0
+            summary_text = "El portafolio viene rezagado frente al benchmark en la ventana analizada."
+        elif port_ret is not None and bench_ret is not None and port_ret >= bench_ret:
+            tone = "slightly_positive"
+            score = 62.0
+            summary_text = "El portafolio mantiene una lectura ligeramente favorable frente al benchmark."
+        else:
+            tone = "neutral"
+            score = 46.0
+            summary_text = "La comparación relativa frente al benchmark es mixta o no concluyente."
+
+        return {
+            "benchmark_available": True,
+            "tone": tone,
+            "score": score,
+            "summary_text": summary_text,
+            "summary_df": summary_df,
+            "extras_df": extras_df,
+            "alpha_jensen": alpha_jensen,
+            "tracking_error": tracking_error,
+            "information_ratio": information_ratio,
+            "max_drawdown": max_drawdown,
+            "portfolio_total_return": port_ret,
+            "benchmark_total_return": bench_ret,
+            "excess_return": (port_ret - bench_ret) if port_ret is not None and bench_ret is not None else np.nan,
+        }
+
+    return _adapter
+
+
+def _extract_persistencia(garch_results: dict[str, Any]) -> float:
+    if not garch_results:
+        return np.nan
+
+    if "persistencia" in garch_results and garch_results["persistencia"] is not None:
+        try:
+            return float(garch_results["persistencia"])
+        except Exception:
+            pass
+
+    diagnostics = garch_results.get("diagnostics", pd.DataFrame())
+    if diagnostics is not None and not diagnostics.empty:
+        mask = diagnostics["metrica"] == "persistencia_alpha_mas_beta"
+        if mask.any():
+            return pd.to_numeric(diagnostics.loc[mask, "valor"], errors="coerce").iloc[0]
+
+    return np.nan
+
+
+def _build_base100_series(
+    portfolio_returns: pd.Series,
+    benchmark_returns: Optional[pd.Series],
+) -> tuple[Optional[pd.Series], Optional[pd.Series]]:
+    if benchmark_returns is None or len(benchmark_returns) == 0:
+        return None, None
+
+    df = pd.concat([portfolio_returns, benchmark_returns], axis=1, join="inner").dropna()
+    if df.empty:
+        return None, None
+
+    df.columns = ["portfolio", "benchmark"]
+    cum_port = (1.0 + df["portfolio"]).cumprod() * 100.0
+    cum_bench = (1.0 + df["benchmark"]).cumprod() * 100.0
+    return cum_port, cum_bench
 
 
 # ==============================
@@ -64,431 +662,21 @@ st.markdown(
         color: #334155 !important;
     }
 
-    .decision-hero {
-        border-radius: 24px;
-        padding: 1.3rem 1.35rem;
-        border: 1px solid rgba(148, 163, 184, 0.22);
-        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
-        margin-bottom: 1rem;
+    .decision-pill-highlight {
+        background: #FDF2F8;
+        border: 1px solid rgba(157, 23, 77, 0.18);
+        color: #831843 !important;
     }
 
-    .decision-hero.positive {
-        background: linear-gradient(135deg, #ECFDF5 0%, #F0FDF4 100%);
-        border-color: rgba(22, 163, 74, 0.22);
-    }
-
-    .decision-hero.warning {
-        background: linear-gradient(135deg, #FFFBEA 0%, #FEFCE8 100%);
-        border-color: rgba(234, 179, 8, 0.24);
-    }
-
-    .decision-hero.danger {
-        background: linear-gradient(135deg, #FFF1F2 0%, #FEF2F2 100%);
-        border-color: rgba(220, 38, 38, 0.22);
-    }
-
-    .decision-hero.neutral {
-        background: linear-gradient(135deg, #F8FAFC 0%, #FFFFFF 100%);
-        border-color: rgba(100, 116, 139, 0.20);
-    }
-
-    .decision-badge {
-        display: inline-flex;
-        align-items: center;
-        padding: 0.42rem 0.78rem;
-        border-radius: 999px;
-        font-size: 0.78rem;
-        font-weight: 800;
-        margin-bottom: 0.8rem;
-        background: rgba(255,255,255,0.72);
-        color: #334155;
-        border: 1px solid rgba(148, 163, 184, 0.18);
-    }
-
-    .decision-title {
-        font-size: 1.75rem;
-        line-height: 1.1;
-        font-weight: 800;
-        color: #0F172A !important;
-        margin-bottom: 0.55rem;
-    }
-
-    .decision-subtitle {
-        font-size: 0.96rem;
-        line-height: 1.6;
-        color: #334155 !important;
-    }
-
-    .decision-support-box {
-        background: #ffffff;
-        border: 1px solid rgba(148, 163, 184, 0.18);
-        border-radius: 18px;
-        padding: 1rem 1rem;
-        margin-top: 0.6rem;
-        box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
-    }
-
-    .decision-support-title {
-        font-size: 0.95rem;
-        font-weight: 800;
-        color: #0F172A !important;
-        margin-bottom: 0.35rem;
-    }
-
-    .decision-support-text {
-        font-size: 0.9rem;
-        color: #475569 !important;
-        line-height: 1.6;
-    }
-
-    .decision-list-card {
-        background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
-        border: 1px solid rgba(148, 163, 184, 0.20);
-        border-radius: 18px;
-        padding: 1rem 1rem;
-        box-shadow: 0 8px 20px rgba(15, 23, 42, 0.04);
-        margin-top: 0.5rem;
-    }
-
-    .decision-list-title {
-        font-size: 0.92rem;
-        font-weight: 900;
-        color: #0F172A !important;
-        margin-bottom: 0.45rem;
-    }
-
-    .decision-chip {
-        display: inline-flex;
-        align-items: center;
-        padding: 0.35rem 0.65rem;
-        border-radius: 999px;
-        background: #0F172A;
-        color: #ffffff !important;
-        font-size: 0.78rem;
-        font-weight: 800;
-        margin-right: 0.4rem;
-        margin-bottom: 0.4rem;
-    }
-
-    .decision-soft-chip {
-        display: inline-flex;
-        align-items: center;
-        padding: 0.35rem 0.65rem;
-        border-radius: 999px;
-        background: #EFF6FF;
-        color: #1D4ED8 !important;
-        font-size: 0.78rem;
-        font-weight: 800;
-        margin-right: 0.4rem;
-        margin-bottom: 0.4rem;
-        border: 1px solid rgba(59, 130, 246, 0.18);
+    .decision-pill-highlight strong,
+    .decision-pill-highlight span,
+    .decision-pill-highlight div {
+        color: #831843 !important;
     }
     </style>
     """,
     unsafe_allow_html=True,
 )
-
-
-# ==============================
-# HELPERS LÓGICOS
-# ==============================
-def _get_rf_annual() -> float:
-    if macro_snapshot is not None:
-        try:
-            snap = macro_snapshot()
-            return float(snap.get("risk_free_rate_pct", 3.0)) / 100.0
-        except Exception:
-            return 0.03
-    return 0.03
-
-
-def _safe_float(x, default=np.nan):
-    try:
-        return float(x)
-    except Exception:
-        return default
-
-
-def _get_profile_config(profile_name: str) -> dict:
-    profiles = {
-        "Conservador": {
-            "label": "Conservador",
-            "desc": (
-                "Prioriza preservación de capital. Penaliza más el VaR, la persistencia GARCH "
-                "y el drawdown. La decisión final exige mayor evidencia para comprar."
-            ),
-            "decision_weights": {"riesgo": 0.50, "tecnica": 0.20, "benchmark": 0.30},
-            "risk_thresholds": {"var_high": 0.020, "var_mid": 0.010, "pers_high": 0.95, "pers_mid": 0.88, "dd_high": 0.18, "dd_mid": 0.08},
-            "buy_threshold": 0.35,
-            "hold_threshold": 0.00,
-        },
-        "Balanceado": {
-            "label": "Balanceado",
-            "desc": (
-                "Busca equilibrio entre retorno y control de riesgo. Mantiene una lectura intermedia "
-                "entre prudencia y oportunidad táctica."
-            ),
-            "decision_weights": {"riesgo": 0.40, "tecnica": 0.30, "benchmark": 0.30},
-            "risk_thresholds": {"var_high": 0.030, "var_mid": 0.015, "pers_high": 0.98, "pers_mid": 0.90, "dd_high": 0.25, "dd_mid": 0.10},
-            "buy_threshold": 0.25,
-            "hold_threshold": -0.10,
-        },
-        "Agresivo": {
-            "label": "Agresivo",
-            "desc": (
-                "Tolera mayor volatilidad para capturar oportunidades. Da más peso a la lectura técnica "
-                "y al desempeño relativo, y acepta un riesgo más alto antes de castigar la decisión."
-            ),
-            "decision_weights": {"riesgo": 0.25, "tecnica": 0.45, "benchmark": 0.30},
-            "risk_thresholds": {"var_high": 0.040, "var_mid": 0.020, "pers_high": 0.99, "pers_mid": 0.92, "dd_high": 0.30, "dd_mid": 0.12},
-            "buy_threshold": 0.15,
-            "hold_threshold": -0.15,
-        },
-    }
-    return profiles.get(profile_name, profiles["Balanceado"])
-
-
-def _signal_bucket(recommendation: str) -> str:
-    txt = str(recommendation).lower()
-    if "compra" in txt:
-        return "favorable"
-    if "venta" in txt:
-        return "desfavorable"
-    return "neutral"
-
-
-def _build_signal_summary(start_date, end_date, selected_tickers: list[str]) -> dict:
-    favorables = 0
-    neutrales = 0
-    desfavorables = 0
-
-    favorables_tickers = []
-    neutrales_tickers = []
-    desfavorables_tickers = []
-
-    for ticker in selected_tickers:
-        try:
-            df = download_single_ticker(ticker=ticker, start=str(start_date), end=str(end_date))
-            if df.empty:
-                continue
-
-            ind = compute_all_indicators(df)
-            signal = evaluate_signals(ind)
-            if not signal:
-                continue
-
-            recommendation = str(signal.get("recommendation", ""))
-            bucket = _signal_bucket(recommendation)
-
-            if bucket == "favorable":
-                favorables += 1
-                favorables_tickers.append(ticker)
-            elif bucket == "desfavorable":
-                desfavorables += 1
-                desfavorables_tickers.append(ticker)
-            else:
-                neutrales += 1
-                neutrales_tickers.append(ticker)
-        except Exception:
-            continue
-
-    if favorables > desfavorables:
-        lectura = "Favorable"
-        score = 1
-        ui = "positive"
-    elif desfavorables > favorables:
-        lectura = "Desfavorable"
-        score = -1
-        ui = "danger"
-    else:
-        lectura = "Neutral"
-        score = 0
-        ui = "warning"
-
-    return {
-        "lectura": lectura,
-        "score": score,
-        "ui": ui,
-        "favorables": favorables,
-        "neutrales": neutrales,
-        "desfavorables": desfavorables,
-        "favorables_tickers": favorables_tickers,
-        "neutrales_tickers": neutrales_tickers,
-        "desfavorables_tickers": desfavorables_tickers,
-    }
-
-
-def _classify_risk(var_hist: float, persistencia: float, max_dd: float, profile_cfg: dict) -> dict:
-    dd_abs = abs(max_dd) if pd.notna(max_dd) else np.nan
-    puntos = 0
-    th = profile_cfg["risk_thresholds"]
-
-    if pd.notna(var_hist):
-        if var_hist >= th["var_high"]:
-            puntos += 2
-        elif var_hist >= th["var_mid"]:
-            puntos += 1
-
-    if pd.notna(persistencia):
-        if persistencia >= th["pers_high"]:
-            puntos += 2
-        elif persistencia >= th["pers_mid"]:
-            puntos += 1
-
-    if pd.notna(dd_abs):
-        if dd_abs >= th["dd_high"]:
-            puntos += 2
-        elif dd_abs >= th["dd_mid"]:
-            puntos += 1
-
-    if puntos >= 5:
-        return {
-            "nivel": "Alto",
-            "score": -1,
-            "ui": "danger",
-            "mensaje": "El perfil de riesgo es elevado para el horizonte analizado y para el perfil del inversor seleccionado.",
-        }
-    if puntos >= 3:
-        return {
-            "nivel": "Medio",
-            "score": 0,
-            "ui": "warning",
-            "mensaje": "El portafolio se ubica en una zona intermedia: no obliga a salir, pero sí exige control de exposición.",
-        }
-    return {
-        "nivel": "Bajo",
-        "score": 1,
-        "ui": "positive",
-        "mensaje": "El perfil de riesgo luce relativamente contenido para la ventana analizada y para este perfil de inversor.",
-    }
-
-
-def _classify_benchmark(summary_df: pd.DataFrame, extras_df: pd.DataFrame) -> dict:
-    if summary_df.empty:
-        return {
-            "nivel": "No concluyente",
-            "score": 0,
-            "ui": "warning",
-            "mensaje": "No fue posible construir una comparación robusta frente al benchmark.",
-        }
-
-    try:
-        port_ret = float(summary_df.loc[summary_df["serie"] == "Portafolio", "ret_anualizado"].iloc[0])
-        bench_ret = float(summary_df.loc[summary_df["serie"] == "Benchmark", "ret_anualizado"].iloc[0])
-
-        alpha = np.nan
-        if not extras_df.empty and "Alpha de Jensen" in extras_df["métrica"].values:
-            alpha = float(extras_df.loc[extras_df["métrica"] == "Alpha de Jensen", "valor"].iloc[0])
-
-        if port_ret > bench_ret and (pd.isna(alpha) or alpha >= 0):
-            return {
-                "nivel": "Superior",
-                "score": 1,
-                "ui": "positive",
-                "mensaje": "El portafolio presenta una lectura relativa favorable frente al benchmark.",
-            }
-
-        if port_ret < bench_ret and (pd.isna(alpha) or alpha < 0):
-            return {
-                "nivel": "Inferior",
-                "score": -1,
-                "ui": "danger",
-                "mensaje": "El portafolio viene rezagado frente al benchmark y no muestra ventaja relativa consistente.",
-            }
-
-        return {
-            "nivel": "No concluyente",
-            "score": 0,
-            "ui": "warning",
-            "mensaje": "La comparación relativa es mixta y no confirma dominancia clara.",
-        }
-    except Exception:
-        return {
-            "nivel": "No concluyente",
-            "score": 0,
-            "ui": "warning",
-            "mensaje": "No fue posible construir una lectura comparativa suficientemente robusta.",
-        }
-
-
-def _weighted_final_decision(risk_score: int, signal_score: int, bench_score: int, decision_weights: dict, profile_cfg: dict) -> dict:
-    total = (
-        risk_score * decision_weights["riesgo"]
-        + signal_score * decision_weights["tecnica"]
-        + bench_score * decision_weights["benchmark"]
-    )
-
-    buy_threshold = profile_cfg["buy_threshold"]
-    hold_threshold = profile_cfg["hold_threshold"]
-
-    if total >= buy_threshold:
-        return {
-            "titulo": "Compra táctica",
-            "ui": "positive",
-            "mensaje_general": "La lectura integrada favorece una postura compradora o de incremento táctico de exposición.",
-            "mensaje_riesgo": "El principal riesgo es que un cambio brusco de mercado revierta la señal técnica y deteriore el perfil de volatilidad.",
-            "mensaje_formal": "La combinación ponderada entre riesgo, señales y benchmark respalda una postura de compra táctica para el perfil seleccionado.",
-            "score_total": total,
-        }
-
-    if total >= hold_threshold:
-        return {
-            "titulo": "Mantener / compra selectiva",
-            "ui": "warning",
-            "mensaje_general": "La lectura integrada permite mantener exposición y considerar compras selectivas, pero no justifica una expansión agresiva de riesgo.",
-            "mensaje_riesgo": "El principal riesgo es entrar con confirmación incompleta y enfrentar un deterioro posterior en benchmark o volatilidad.",
-            "mensaje_formal": "La evidencia agregada no es lo bastante fuerte para una postura agresiva, pero tampoco justifica deshacer exposición. La decisión razonable es mantener y comprar de forma selectiva.",
-            "score_total": total,
-        }
-
-    if total >= -0.45:
-        return {
-            "titulo": "Reducir exposición",
-            "ui": "warning",
-            "mensaje_general": "La lectura integrada sugiere reducir parcialmente exposición o evitar nuevas compras hasta que mejoren las condiciones.",
-            "mensaje_riesgo": "El riesgo central es mantener una posición relativamente alta en un contexto donde la evidencia agregada se ha debilitado.",
-            "mensaje_formal": "La combinación de señales no favorece una ampliación de posición. La decisión más consistente es reducir exposición marginalmente y esperar mejor confirmación.",
-            "score_total": total,
-        }
-
-    return {
-        "titulo": "Venta / postura defensiva",
-        "ui": "danger",
-        "mensaje_general": "La lectura integrada favorece una postura defensiva: reducir exposición de forma relevante o priorizar salida.",
-        "mensaje_riesgo": "El principal riesgo es permanecer sobreexpuesto en un entorno donde coinciden riesgo elevado, deterioro técnico y/o rezago relativo.",
-        "mensaje_formal": "La evidencia integrada es adversa. Desde una perspectiva de control de riesgo, la postura más defendible es de venta o reducción sustancial de exposición.",
-        "score_total": total,
-    }
-
-
-def _build_portfolio_returns(returns_df: pd.DataFrame, weights: np.ndarray) -> pd.Series:
-    clean_weights = np.asarray(weights, dtype=float)
-    clean_weights = clean_weights / clean_weights.sum()
-    return (returns_df * clean_weights).sum(axis=1)
-
-
-def _render_chip_list(items: list[str], empty_text: str, soft: bool = False):
-    if not items:
-        st.info(empty_text)
-        return
-
-    chip_class = "decision-soft-chip" if soft else "decision-chip"
-    html = "".join([f'<span class="{chip_class}">{x}</span>' for x in items])
-    st.markdown(html, unsafe_allow_html=True)
-
-
-def render_decision_hero(title: str, subtitle: str, level: str = "neutral"):
-    st.markdown(
-        f"""
-        <div class="decision-hero {level}">
-            <div class="decision-badge">Decisión integrada del portafolio</div>
-            <div class="decision-title">{title}</div>
-            <div class="decision-subtitle">{subtitle}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
 
 # ==============================
 # SETUP GLOBAL
@@ -497,20 +685,31 @@ modo, filtros_sidebar = setup_dashboard_page(
     title="Dashboard Riesgo",
     subtitle="Universidad Santo Tomás",
     modo_default="General",
-    filtros_label="Parámetros De Decisión",
+    filtros_label="Parámetros Del Panel De Decisión",
     filtros_expanded=False,
 )
-
-all_tickers = [meta["ticker"] for meta in ASSETS.values()]
-
 
 # ==============================
 # SIDEBAR
 # ==============================
+asset_name_by_ticker = {
+    meta["ticker"]: asset_name
+    for asset_name, meta in ASSETS.items()
+}
+all_tickers = list(asset_name_by_ticker.keys())
+
 with filtros_sidebar:
     horizonte = st.selectbox(
         "Horizonte de análisis",
-        ["1 mes", "Trimestre", "Semestre", "1 año", "3 años", "5 años", "Personalizado"],
+        [
+            "1 mes",
+            "Trimestre",
+            "Semestre",
+            "1 año",
+            "3 años",
+            "5 años",
+            "Personalizado",
+        ],
         index=3,
         key="decision_horizonte",
     )
@@ -543,46 +742,82 @@ with filtros_sidebar:
             end_date = st.date_input("Fecha final", value=DEFAULT_END_DATE, key="decision_end")
 
     selected_tickers = st.multiselect(
-        "Selecciona activos",
+        "Activos del portafolio",
         options=all_tickers,
         default=all_tickers,
-        key="decision_selected_tickers",
-        help="Escoge los activos que quieres incluir en el panel de decisión.",
+        format_func=lambda x: f"{x} · {asset_name_by_ticker.get(x, x)}",
+        key="decision_tickers",
     )
 
-    investor_profile = st.selectbox(
-        "Perfil del inversor",
-        ["Conservador", "Balanceado", "Agresivo", "Personalizado"],
-        index=1,
-        key="decision_profile",
-        help=(
-            "Conservador: penaliza más el riesgo y exige más evidencia para comprar.\n\n"
-            "Balanceado: combina riesgo, señales y benchmark con pesos intermedios.\n\n"
-            "Agresivo: tolera más volatilidad y da mayor peso a señales y benchmark.\n\n"
-            "Personalizado: tú defines manualmente la importancia de riesgo, técnica y benchmark."
-        ),
-    )
-
-    portfolio_mode = st.radio(
-        "Construcción del portafolio",
-        ["Equiponderado", "Pesos manuales"],
+    construction_choice = st.selectbox(
+        "Objetivo de construcción del portafolio",
+        [
+            "Equiponderado",
+            "Pesos manuales",
+            "Mínima varianza",
+            "Máxima utilidad",
+        ],
         index=0,
-        key="decision_portfolio_mode",
-        help="Equiponderado asigna el mismo peso a todos los activos. Pesos manuales permite definir la asignación del inversor.",
+        key="decision_construction_choice",
     )
 
-    mostrar_detalle = st.checkbox(
-        "Mostrar detalle técnico",
-        value=(modo == "Estadístico"),
-        key="decision_show_detail",
+    manual_weights_pct: dict[str, float] = {}
+    manual_sum_pct = 0.0
+
+    if construction_choice == "Pesos manuales" and selected_tickers:
+        st.caption("Los pesos manuales deben sumar 100%.")
+
+        n_assets = len(selected_tickers)
+        default_equal = round(100.0 / n_assets, 2)
+
+        for i, ticker in enumerate(selected_tickers):
+            default_value = default_equal
+            if i == n_assets - 1:
+                default_value = max(0.0, round(100.0 - default_equal * (n_assets - 1), 2))
+
+            manual_weights_pct[ticker] = st.number_input(
+                f"Peso {ticker} (%)",
+                min_value=0.0,
+                max_value=100.0,
+                value=float(default_value),
+                step=0.5,
+                key=f"decision_manual_weight_{ticker}",
+            )
+
+        manual_sum_pct = float(sum(manual_weights_pct.values()))
+        if np.isclose(manual_sum_pct, 100.0, atol=0.01):
+            st.success(f"Suma actual: {manual_sum_pct:.2f}%")
+        else:
+            st.error(f"Suma actual: {manual_sum_pct:.2f}% · debe ser 100%.")
+
+    utility_focus = 0.65
+    if construction_choice == "Máxima utilidad":
+        utility_focus = st.slider(
+            "Énfasis retorno-utilidad",
+            min_value=0.50,
+            max_value=0.95,
+            value=0.65,
+            step=0.05,
+            key="decision_utility_focus",
+            help="Valores más altos dan más peso al retorno esperado frente a la componente defensiva.",
+        )
+
+    benchmark_option = st.selectbox(
+        "Benchmark",
+        [GLOBAL_BENCHMARK, "Sin benchmark"],
+        index=0,
+        key="decision_benchmark",
     )
+
+    mostrar_tablas = st.checkbox("Mostrar tablas completas", value=False, key="decision_show_tables")
 
     with st.expander("Filtros secundarios", expanded=False):
-        alpha = st.select_slider(
-            "Nivel de confianza VaR",
+        confidence_level = st.select_slider(
+            "Nivel de confianza VaR / CVaR",
             options=[0.95, 0.96, 0.97, 0.98, 0.99],
             value=0.95,
-            key="decision_alpha",
+            format_func=lambda x: f"{x:.0%}",
+            key="decision_conf",
         )
         n_sim = st.slider(
             "Simulaciones Monte Carlo",
@@ -592,212 +827,199 @@ with filtros_sidebar:
             step=5000,
             key="decision_nsim",
         )
-
-    # Pesos del portafolio
-    manual_weights_pct = {}
-    if portfolio_mode == "Pesos manuales":
-        st.markdown("**Pesos del portafolio (%)**")
-        for ticker in selected_tickers:
-            manual_weights_pct[ticker] = st.number_input(
-                f"Peso {ticker}",
-                min_value=0.0,
-                max_value=100.0,
-                value=round(100.0 / max(len(selected_tickers), 1), 2),
-                step=1.0,
-                key=f"weight_{ticker}",
+        if modo == "Estadístico":
+            mostrar_diagnostico = st.checkbox(
+                "Mostrar diagnóstico técnico",
+                value=True,
+                key="decision_show_diag",
             )
-
-        total_manual_weights = sum(manual_weights_pct.values())
-        if abs(total_manual_weights - 100.0) > 0.01:
-            st.error(f"La suma de los pesos debe ser 100%. Actualmente suma {total_manual_weights:.2f}%.")
         else:
-            st.success("La suma de pesos es válida: 100%.")
-
-    # Pesos de decisión
-    if investor_profile == "Personalizado":
-        st.markdown("**Importancia de cada bloque (%)**")
-        risk_pct = st.slider("Riesgo", 0, 100, 40, 5, key="decision_w_risk")
-        tech_pct = st.slider("Técnica", 0, 100, 30, 5, key="decision_w_tech")
-        bench_pct = st.slider("Benchmark", 0, 100, 30, 5, key="decision_w_bench")
-
-        total_decision_pct = risk_pct + tech_pct + bench_pct
-        if total_decision_pct != 100:
-            st.warning(f"La suma actual es {total_decision_pct}%. Debe ser 100%.")
-        else:
-            st.success("La suma de pesos de decisión es 100%.")
-
-        profile_cfg = {
-            "label": "Personalizado",
-            "desc": (
-                "El usuario define manualmente cuánto pesa el riesgo, la lectura técnica y el benchmark "
-                "en la decisión final del portafolio."
-            ),
-            "decision_weights": {
-                "riesgo": risk_pct / 100.0,
-                "tecnica": tech_pct / 100.0,
-                "benchmark": bench_pct / 100.0,
-            },
-            "risk_thresholds": {"var_high": 0.030, "var_mid": 0.015, "pers_high": 0.98, "pers_mid": 0.90, "dd_high": 0.25, "dd_mid": 0.10},
-            "buy_threshold": 0.25,
-            "hold_threshold": -0.10,
-        }
-    else:
-        profile_cfg = _get_profile_config(investor_profile)
-
+            mostrar_diagnostico = st.checkbox(
+                "Mostrar diagnóstico técnico",
+                value=False,
+                key="decision_show_diag_gen",
+            )
 
 # ==============================
 # VALIDACIONES
 # ==============================
+if not selected_tickers:
+    st.error("Debes seleccionar al menos un activo para construir el portafolio.")
+    st.stop()
+
 if start_date >= end_date:
     st.error("La fecha inicial debe ser menor que la fecha final.")
     st.stop()
 
-if not selected_tickers:
-    st.warning("Selecciona al menos un activo para continuar.")
+if construction_choice == "Pesos manuales" and not np.isclose(manual_sum_pct, 100.0, atol=0.01):
+    st.error("Con pesos manuales, la suma debe ser exactamente 100%.")
     st.stop()
 
-if portfolio_mode == "Pesos manuales":
-    total_manual_weights = sum(manual_weights_pct.values())
-    if abs(total_manual_weights - 100.0) > 0.01:
-        st.stop()
-
-if investor_profile == "Personalizado":
-    if (risk_pct + tech_pct + bench_pct) != 100:
-        st.stop()
-
-
 # ==============================
-# DATOS BASE
+# DATOS
 # ==============================
-bundle = load_market_bundle(tickers=selected_tickers, start=str(start_date), end=str(end_date))
-returns = bundle["returns"].replace([np.inf, -np.inf], np.nan).dropna()
+bundle = load_market_bundle(
+    tickers=selected_tickers,
+    start=str(start_date),
+    end=str(end_date),
+)
+
+returns = bundle["returns"].replace([np.inf, -np.inf], np.nan).dropna(how="any")
+prices_df = _extract_prices_from_bundle(bundle, selected_tickers)
 
 if returns.empty or len(returns) < 30:
     st.error("No hay suficientes datos para construir el panel de decisión.")
     st.stop()
 
-if portfolio_mode == "Equiponderado":
-    weights = np.repeat(1.0 / returns.shape[1], returns.shape[1])
-else:
-    weights = np.array([manual_weights_pct[t] / 100.0 for t in returns.columns], dtype=float)
+if prices_df.empty:
+    prices_df = pd.DataFrame(index=returns.index, columns=selected_tickers, data=np.nan)
 
-portfolio_returns = _build_portfolio_returns(returns, weights)
-rf_annual = _get_rf_annual()
+macro = _get_macro()
+rf_annual = _get_rf_annual(macro)
 
-# Riesgo extremo
-risk_table = risk_comparison_table(
-    portfolio_returns=portfolio_returns,
-    asset_returns_df=returns,
-    weights=weights,
-    alpha=alpha,
-    n_sim=n_sim,
+rf_pct = macro.get("risk_free_rate_pct", np.nan)
+rf_pct = float(rf_pct) if pd.notna(rf_pct) else None
+
+inflation_yoy = macro.get("inflation_yoy", np.nan)
+inflation_yoy = float(inflation_yoy) if pd.notna(inflation_yoy) else None
+
+usdcop_market = macro.get("usdcop_market", np.nan)
+usdcop_market = float(usdcop_market) if pd.notna(usdcop_market) else None
+
+cop_per_usd = macro.get("cop_per_usd", np.nan)
+cop_per_usd = float(cop_per_usd) if pd.notna(cop_per_usd) else None
+
+benchmark_returns = None
+if benchmark_option != "Sin benchmark":
+    benchmark_returns = _download_benchmark_returns(benchmark_option, start_date, end_date)
+
+weighting_mode, manual_weights, markowitz_weights, portfolio_weights_preview = _resolve_portfolio_construction(
+    selected_tickers=selected_tickers,
+    returns_df=returns,
+    construction_choice=construction_choice,
+    manual_weights_pct=manual_weights_pct,
+    rf_annual=rf_annual,
+    utility_focus=utility_focus,
 )
 
-var_hist = np.nan
-cvar_hist = np.nan
-if not risk_table.empty and "Histórico" in risk_table["método"].values:
-    row_hist = risk_table.loc[risk_table["método"] == "Histórico"].iloc[0]
-    var_hist = _safe_float(row_hist["VaR_diario"])
-    cvar_hist = _safe_float(row_hist["CVaR_diario"])
+investor_profile = "balanceado"
+custom_profile = None
 
-# GARCH
-garch_validation = validar_serie_para_garch(portfolio_returns, min_obs=120, max_null_ratio=0.05)
-persistencia = np.nan
+signal_adapter = _make_signal_adapter(start_date, end_date)
+var_cvar_adapter = _make_var_cvar_adapter(returns, portfolio_weights_preview, n_sim)
+benchmark_adapter = _make_benchmark_adapter(rf_annual)
 
-if garch_validation["ok"]:
-    serie_garch = garch_validation["serie_limpia"] * 100.0
-    garch_results = fit_garch_models(serie_garch)
-else:
-    garch_results = {"comparison": pd.DataFrame(), "diagnostics": pd.DataFrame(), "summary_text": ""}
+engine_inputs = DecisionEngineInputs(
+    tickers=selected_tickers,
+    prices_df=prices_df,
+    returns_df=returns,
+    weighting_mode=weighting_mode,
+    manual_weights=manual_weights,
+    markowitz_weights=markowitz_weights,
+    investor_profile=investor_profile,
+    custom_profile=custom_profile,
+    confidence_level=confidence_level,
+    benchmark_returns=benchmark_returns,
+)
 
-if not garch_results["diagnostics"].empty:
-    persist_row = garch_results["diagnostics"].loc[
-        garch_results["diagnostics"]["metrica"] == "persistencia_alpha_mas_beta"
-    ]
-    if not persist_row.empty:
-        persistencia = pd.to_numeric(persist_row["valor"], errors="coerce").iloc[0]
-
-# Benchmark
-summary_df = pd.DataFrame()
-extras_df = pd.DataFrame()
-max_dd = np.nan
+engine_deps = EngineDependencies(
+    var_cvar_func=var_cvar_adapter,
+    garch_func=_garch_adapter,
+    benchmark_func=benchmark_adapter,
+    signals_func=signal_adapter,
+)
 
 try:
-    bench_df = yf.download("^GSPC", start=str(start_date), end=str(end_date), auto_adjust=False)
+    engine_result = run_decision_engine(engine_inputs, engine_deps)
+except Exception as exc:
+    st.error(f"No fue posible construir el panel de decisión: {exc}")
+    st.stop()
 
-    if not bench_df.empty:
-        if isinstance(bench_df.columns, pd.MultiIndex):
-            if ("Adj Close", "^GSPC") in bench_df.columns:
-                benchmark_prices = bench_df[("Adj Close", "^GSPC")]
-            elif ("Close", "^GSPC") in bench_df.columns:
-                benchmark_prices = bench_df[("Close", "^GSPC")]
-            else:
-                benchmark_prices = pd.Series(dtype=float)
-        else:
-            if "Adj Close" in bench_df.columns:
-                benchmark_prices = bench_df["Adj Close"]
-            elif "Close" in bench_df.columns:
-                benchmark_prices = bench_df["Close"]
-            else:
-                benchmark_prices = pd.Series(dtype=float)
+# ==============================
+# RESULTADOS
+# ==============================
+final_decision = engine_result.final_decision
+objective_risk = engine_result.objective_risk
+signal_summary = engine_result.signal_summary
+benchmark_summary_dict = engine_result.benchmark_summary
+garch_results = engine_result.garch_results
 
-        benchmark_prices = pd.to_numeric(benchmark_prices, errors="coerce").dropna()
-        benchmark_returns = benchmark_prices.pct_change().dropna()
+weights_df = engine_result.weights_df.copy()
+metrics_df = engine_result.metrics_df.copy()
+scorecard_df = engine_result.scorecard_df.copy()
+selective_buys_df = engine_result.selective_buys_df.copy()
 
-        if not benchmark_returns.empty:
-            summary_df, extras_df, _, _ = benchmark_summary(
-                portfolio_returns=portfolio_returns,
-                benchmark_returns=benchmark_returns,
-                rf_annual=rf_annual,
-            )
-except Exception:
-    summary_df = pd.DataFrame()
-    extras_df = pd.DataFrame()
+metrics_map = dict(zip(metrics_df["Metrica"], metrics_df["Valor"]))
+garch_persistencia = _extract_persistencia(garch_results)
 
-if not summary_df.empty:
-    try:
-        max_dd = float(summary_df.loc[summary_df["serie"] == "Portafolio", "max_drawdown"].iloc[0])
-    except Exception:
-        max_dd = np.nan
+benchmark_detail_df = benchmark_summary_dict.get("summary_df", pd.DataFrame())
+benchmark_extras_df = benchmark_summary_dict.get("extras_df", pd.DataFrame())
+signal_table = signal_summary.get("signal_table", pd.DataFrame())
 
-# Señales
-signal_summary = _build_signal_summary(start_date, end_date, selected_tickers)
+alpha_jensen = benchmark_summary_dict.get("alpha_jensen", np.nan)
+tracking_error = benchmark_summary_dict.get("tracking_error", np.nan)
+information_ratio = benchmark_summary_dict.get("information_ratio", np.nan)
+max_drawdown = benchmark_summary_dict.get("max_drawdown", np.nan)
+ret_port = benchmark_summary_dict.get("portfolio_total_return", np.nan)
+ret_bench = benchmark_summary_dict.get("benchmark_total_return", np.nan)
 
-# Clasificaciones
-risk_view = _classify_risk(var_hist, persistencia, max_dd, profile_cfg)
-bench_view = _classify_benchmark(summary_df, extras_df)
-decision = _weighted_final_decision(
-    risk_view["score"],
-    signal_summary["score"],
-    bench_view["score"],
-    profile_cfg["decision_weights"],
-    profile_cfg,
+favorable_ratio = signal_summary.get("favorable_ratio", np.nan)
+balance_signals = len(signal_summary.get("favorables_en_portafolio", [])) - len(signal_summary.get("desfavorables_en_portafolio", []))
+
+cum_port, cum_bench = _build_base100_series(
+    engine_result.portfolio_returns,
+    benchmark_returns,
 )
 
+construction_mode_label = {
+    "equal": "Equiponderado",
+    "manual": "Pesos manuales",
+    "markowitz": "Optimizado",
+}.get(weighting_mode, "N/D")
+
+construction_objective_label = {
+    "Equiponderado": "Equiponderado",
+    "Pesos manuales": "Pesos manuales",
+    "Mínima varianza": "Mínima varianza",
+    "Máxima utilidad": "Máxima utilidad",
+}.get(construction_choice, construction_choice)
 
 # ==============================
 # HEADER
 # ==============================
 header_dashboard(
     "Módulo 9 - Panel de decisión",
-    "Integra riesgo, volatilidad, señales técnicas, benchmark y preferencias del inversor para producir una postura de acción más ajustada al usuario.",
+    "Integra riesgo, VaR, CVaR, GARCH, benchmark y señales para producir una postura final coherente con una regla base estable y con un objetivo de construcción separado",
     modo=modo,
 )
 
 if modo == "General":
     nota(
-        "Este módulo resume la evidencia más importante del portafolio y la adapta al perfil del inversor para convertirla en una postura concreta de acción."
+        "Este módulo separa dos capas: el objetivo de construcción define los pesos del portafolio, mientras la regla del motor traduce ese diagnóstico en una postura final estable."
     )
 else:
     nota(
-        "La decisión se construye con una agregación ponderada entre riesgo, señales técnicas y benchmark, ajustada por el perfil o por los pesos personalizados del usuario."
+        "En modo estadístico, el panel separa construcción y decisión. El riesgo objetivo del portafolio surge de la construcción elegida; la postura final se obtiene aplicando una regla base estable del motor."
     )
 
+if macro.get("source"):
+    st.caption(f"Fuente macro: {macro['source']}")
+if macro.get("last_updated"):
+    st.caption(f"Última actualización macro: {macro['last_updated']}")
 
 # ==============================
-# RESUMEN DEL MÓDULO
+# RESUMEN
 # ==============================
 seccion("Resumen Del Módulo")
+
+if modo == "General":
+    nota(
+        "La decisión final se construye con tres pilares: riesgo objetivo del portafolio, lectura técnica agregada y comparación frente al benchmark. Los pesos dependen de la construcción elegida y no de un filtro de perfil."
+    )
+else:
+    nota(
+        "Metodológicamente, el panel corrige el problema conceptual original: la decisión ya no depende de un filtro subjetivo visible, sino de una regla estable aplicada sobre un portafolio construido con un objetivo explícito."
+    )
 
 st.markdown(
     f"""
@@ -805,310 +1027,351 @@ st.markdown(
         <div class="decision-mini-meta"><strong>Horizonte:</strong>&nbsp;{horizonte}</div>
         <div class="decision-mini-meta"><strong>Inicio:</strong>&nbsp;{start_date}</div>
         <div class="decision-mini-meta"><strong>Fin:</strong>&nbsp;{end_date}</div>
-        <div class="decision-mini-meta"><strong>VaR:</strong>&nbsp;{int(alpha * 100)}%</div>
-        <div class="decision-mini-meta"><strong>Monte Carlo:</strong>&nbsp;{n_sim:,}</div>
-        <div class="decision-mini-meta"><strong>Perfil:</strong>&nbsp;{profile_cfg["label"]}</div>
-        <div class="decision-mini-meta"><strong>Portafolio:</strong>&nbsp;{portfolio_mode}</div>
+        <div class="decision-mini-meta decision-pill-highlight"><strong>Construcción:</strong>&nbsp;{construction_objective_label}</div>
+        <div class="decision-mini-meta"><strong>Modo pesos:</strong>&nbsp;{construction_mode_label}</div>
+        <div class="decision-mini-meta"><strong>Benchmark:</strong>&nbsp;{benchmark_option}</div>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-hero_text = decision["mensaje_general"] if modo == "General" else decision["mensaje_formal"]
-render_decision_hero(decision["titulo"], hero_text, level=decision["ui"])
-
-seccion("Perfil Del Inversor Aplicado")
-nota(profile_cfg["desc"])
-nota(
-    f"Peso de decisión aplicado → Riesgo: {profile_cfg['decision_weights']['riesgo']:.0%} | "
-    f"Técnica: {profile_cfg['decision_weights']['tecnica']:.0%} | "
-    f"Benchmark: {profile_cfg['decision_weights']['benchmark']:.0%}"
-)
-
-
 # ==============================
 # TABS
 # ==============================
-tab1, tab2, tab3 = st.tabs(
-    [
-        "Decisión integrada",
-        "Métricas de soporte",
-        "Detalle técnico",
-    ]
-)
-
+tab1, tab2, tab3 = st.tabs([
+    "Decisión integrada",
+    "Métricas de soporte",
+    "Tablas e interpretación",
+])
 
 # ==============================
 # TAB 1
 # ==============================
 with tab1:
-    seccion("Pilares De La Decisión")
-
-    p1, p2, p3 = st.columns(3)
-
-    with p1:
-        tarjeta_kpi(
-            "Riesgo",
-            risk_view["nivel"],
-            help_text="Clasificación agregada del perfil de riesgo a partir de VaR histórico, persistencia GARCH y drawdown.",
-            subtexto=risk_view["mensaje"],
-        )
-
-    with p2:
-        tarjeta_kpi(
-            "Lectura técnica",
-            signal_summary["lectura"],
-            help_text="Se resume con base en el balance entre señales favorables, neutrales y desfavorables del conjunto de activos.",
-            subtexto=(
-                f"Favorables: {signal_summary['favorables']} | "
-                f"Neutrales: {signal_summary['neutrales']} | "
-                f"Desfavorables: {signal_summary['desfavorables']}"
-            ),
-        )
-
-    with p3:
-        tarjeta_kpi(
-            "Benchmark",
-            bench_view["nivel"],
-            help_text="Compara el desempeño relativo del portafolio frente al benchmark usando retorno anualizado y alpha de Jensen.",
-            subtexto=bench_view["mensaje"],
-        )
-
-    plot_card_footer(
-        f"Decisión sugerida: {decision['titulo']}. "
-        f"El panel consolida la evidencia de riesgo, técnica y benchmark y la ajusta al perfil del inversor."
-    )
-
-    seccion("Interpretación De La Postura")
+    seccion("Postura Final Del Motor")
 
     if modo == "General":
         nota(
-            f"La decisión actual del panel es {decision['titulo']}. Esto significa que, bajo la evidencia observada y el perfil {profile_cfg['label'].lower()}, la combinación de riesgo, señales y benchmark favorece la siguiente lectura: {decision['mensaje_general']}"
-        )
-        nota(
-            f"El principal riesgo de implementación es el siguiente: {decision['mensaje_riesgo']}"
+            "La salida del panel es una postura operativa clara. La construcción elegida define los pesos; la regla base del motor define cómo actuar frente al riesgo que esos pesos generan."
         )
     else:
         nota(
-            f"La clasificación final del panel es {decision['titulo']}. No debe entenderse como una predicción puntual, sino como una postura razonable dada la información consolidada y las preferencias del usuario."
-        )
-        nota(
-            f"Conclusión formal: {decision['mensaje_formal']}"
-        )
-        nota(
-            f"Riesgo de implementación: {decision['mensaje_riesgo']}"
+            "La postura final surge de un score objetivo del portafolio y de una regla base de decisión. Los pesos pertenecen a la capa de construcción; la acción pertenece a la capa de decisión."
         )
 
-    seccion("Compras Selectivas Recomendadas")
+    c1, c2, c3, c4 = st.columns(4)
 
-    if decision["titulo"] in ["Compra táctica", "Mantener / compra selectiva"]:
-        if signal_summary["favorables_tickers"]:
-            st.markdown(
-                """
-                <div class="decision-list-card">
-                    <div class="decision-list-title">Activos con lectura favorable</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            _render_chip_list(
-                signal_summary["favorables_tickers"],
-                "No hay activos con señal favorable clara en esta ventana.",
-            )
+    with c1:
+        tarjeta_kpi(
+            "Postura final",
+            final_decision["stance"],
+            final_decision["action"],
+            help_text="Conclusión operativa del motor de decisión.",
+            subtexto="Es la recomendación final bajo una regla base estable.",
+        )
 
-            nota(
-                "Estas compras selectivas corresponden a los activos que presentan lectura técnica favorable dentro del universo analizado. No implica comprar todos los activos del portafolio, sino priorizar aquellos con mejor confirmación relativa."
-            )
-        else:
-            st.info("No se recomiendan compras selectivas en esta ventana: no hay activos con señal favorable suficientemente clara.")
+    with c2:
+        tarjeta_kpi(
+            "Riesgo objetivo",
+            objective_risk["risk_label"],
+            f"Score {objective_risk['risk_score']}",
+            help_text="Clasificación objetiva del riesgo del portafolio.",
+            subtexto="Cambia con la construcción, no por un filtro de perfil.",
+        )
+
+    with c3:
+        tarjeta_kpi(
+            "Construcción",
+            construction_objective_label,
+            help_text="Criterio que define los pesos del portafolio.",
+            subtexto="Separado de la postura final del motor.",
+        )
+
+    with c4:
+        tarjeta_kpi(
+            "Compras selectivas",
+            str(len(selective_buys_df)),
+            "Tickers sugeridos" if not selective_buys_df.empty else "Sin candidatos",
+            help_text="Número de activos con señal favorable y consistencia con el portafolio.",
+            subtexto="Se listan activos concretos y no texto genérico.",
+        )
+
+    plot_card_footer(final_decision["explanation"])
+
+    seccion("Regla De Decisión Del Motor")
+    nota(
+        "En esta versión, el panel no expone un filtro de perfil del inversor. La decisión final se construye con una regla base estable y coherente, separada de la construcción de pesos del portafolio."
+    )
+
+    seccion("Señales Y Compras Selectivas")
+
+    s1, s2, s3 = st.columns(3)
+
+    with s1:
+        tarjeta_kpi(
+            "Lectura técnica",
+            signal_label(signal_summary.get("tone", "neutral")),
+            delta_label(
+                balance_signals,
+                "Sesgo comprador",
+                "Sesgo vendedor",
+                "Balance neutro",
+            ),
+            help_text="Resumen agregado de señales del portafolio.",
+            subtexto="Se construye a partir de señales favorables, neutrales y desfavorables.",
+        )
+
+    with s2:
+        tarjeta_kpi(
+            "Proporción favorable",
+            f"{favorable_ratio:.2%}" if pd.notna(favorable_ratio) else "N/D",
+            help_text="Porcentaje de activos del portafolio con señal favorable.",
+            subtexto="Se utiliza dentro de la regla final de decisión.",
+        )
+
+    with s3:
+        tarjeta_kpi(
+            "Benchmark relativo",
+            benchmark_label(benchmark_summary_dict.get("tone", "neutral")),
+            help_text="Lectura comparativa del portafolio frente al benchmark.",
+            subtexto=benchmark_summary_dict.get("summary_text", "Sin comparación disponible."),
+        )
+
+    if not selective_buys_df.empty:
+        st.markdown("#### Tickers sugeridos para compra selectiva")
+        st.dataframe(selective_buys_df, use_container_width=True, hide_index=True)
     else:
-        st.info("La postura actual no favorece nuevas compras; primero debería mejorar la evidencia agregada del panel.")
-
+        nota(
+            "No se identificaron compras selectivas consistentes con las señales y con la composición actual del portafolio."
+        )
 
 # ==============================
 # TAB 2
 # ==============================
 with tab2:
-    seccion("Indicadores Clave De Soporte")
-
-    alpha_jensen = np.nan
-    if not extras_df.empty and "Alpha de Jensen" in extras_df["métrica"].values:
-        try:
-            alpha_jensen = float(extras_df.loc[extras_df["métrica"] == "Alpha de Jensen", "valor"].iloc[0])
-        except Exception:
-            alpha_jensen = np.nan
-
-    balance_signals = signal_summary["favorables"] - signal_summary["desfavorables"]
+    seccion("KPIs De Soporte Cuantitativo")
 
     k1, k2, k3, k4 = st.columns(4)
 
     with k1:
         tarjeta_kpi(
-            "VaR histórico",
-            f"{var_hist:.2%}" if pd.notna(var_hist) else "N/D",
-            help_text="Pérdida umbral estimada del portafolio bajo la distribución histórica observada.",
-            subtexto="Sirve como aproximación de pérdida potencial diaria.",
+            "VaR",
+            f"{metrics_map.get(f'VaR ({confidence_level:.0%})', np.nan):.2%}" if pd.notna(metrics_map.get(f"VaR ({confidence_level:.0%})", np.nan)) else "N/D",
+            help_text="Pérdida umbral estimada del portafolio.",
+            subtexto="Se incorpora en la clasificación objetiva del riesgo.",
         )
 
     with k2:
         tarjeta_kpi(
-            "Persistencia GARCH",
-            f"{persistencia:.3f}" if pd.notna(persistencia) else "N/D",
-            help_text="Mide la memoria de la volatilidad en el portafolio.",
-            subtexto="Valores altos sugieren que los choques de volatilidad tardan más en disiparse.",
+            "CVaR",
+            f"{metrics_map.get(f'CVaR ({confidence_level:.0%})', np.nan):.2%}" if pd.notna(metrics_map.get(f"CVaR ({confidence_level:.0%})", np.nan)) else "N/D",
+            help_text="Pérdida esperada condicional en cola.",
+            subtexto="Captura severidad promedio en escenarios extremos.",
         )
 
     with k3:
         tarjeta_kpi(
-            "Alpha de Jensen",
-            f"{alpha_jensen:.4f}" if pd.notna(alpha_jensen) else "N/D",
-            help_text="Exceso de desempeño ajustado por riesgo sistemático frente al benchmark.",
-            subtexto="Ayuda a validar si el portafolio realmente agregó valor relativo.",
+            "Volatilidad anualizada",
+            f"{metrics_map.get('Volatilidad anualizada', np.nan):.2%}" if pd.notna(metrics_map.get("Volatilidad anualizada", np.nan)) else "N/D",
+            help_text="Volatilidad anual del portafolio.",
+            subtexto="También participa en la clasificación objetiva del riesgo.",
         )
 
     with k4:
         tarjeta_kpi(
-            "Balance de señales",
-            str(balance_signals),
-            help_text="Diferencia entre señales favorables y desfavorables del conjunto de activos.",
-            subtexto="Un valor positivo sugiere sesgo comprador; uno negativo, sesgo vendedor.",
+            "Persistencia GARCH",
+            f"{garch_persistencia:.3f}" if pd.notna(garch_persistencia) else "N/D",
+            delta_label(
+                (0.90 - garch_persistencia) if pd.notna(garch_persistencia) else None,
+                "Persistencia moderada",
+                "Persistencia alta",
+                "Persistencia límite",
+            ),
+            help_text="Memoria de la volatilidad condicional del portafolio.",
+            subtexto="Apoya la lectura dinámica del riesgo.",
         )
 
-    if pd.notna(cvar_hist):
-        c1, c2 = st.columns(2)
-        with c1:
-            tarjeta_kpi(
-                "CVaR histórico",
-                f"{cvar_hist:.2%}",
-                help_text="Pérdida media esperada una vez se supera el umbral VaR.",
-                subtexto="Complementa al VaR al medir severidad de pérdidas extremas.",
-            )
-        with c2:
-            tarjeta_kpi(
-                "Tasa libre de riesgo",
-                f"{rf_annual:.2%}",
-                help_text="Se obtiene del módulo macroeconómico y se usa en métricas ajustadas por riesgo.",
-                subtexto="Si no hay dato disponible, el sistema usa un fallback de 3% anual.",
-            )
+    plot_card_footer(objective_risk["rationale"])
 
-    seccion("Asignación Del Portafolio")
+    seccion("Benchmark Y Contexto Macro")
 
-    weights_df = pd.DataFrame(
-        {
-            "Ticker": list(returns.columns),
-            "Peso": [f"{w:.2%}" for w in weights],
-        }
-    )
-    st.dataframe(weights_df, use_container_width=True, hide_index=True)
+    b1, b2, b3, b4 = st.columns(4)
+
+    with b1:
+        tarjeta_kpi(
+            "Retorno portafolio",
+            f"{ret_port:.2%}" if pd.notna(ret_port) else "N/D",
+            help_text="Retorno acumulado del portafolio frente al benchmark.",
+            subtexto="Permite evaluar generación de valor relativa.",
+        )
+
+    with b2:
+        tarjeta_kpi(
+            "Alpha de Jensen",
+            f"{alpha_jensen:.4f}" if pd.notna(alpha_jensen) else "N/D",
+            delta_label(alpha_jensen, "Alpha positivo", "Alpha negativo", "Alpha neutro"),
+            help_text="Exceso de desempeño ajustado por riesgo sistemático.",
+            subtexto="Resume si el portafolio agregó valor frente a lo esperado por CAPM.",
+        )
+
+    with b3:
+        tarjeta_kpi(
+            "Tracking Error",
+            f"{tracking_error:.4f}" if pd.notna(tracking_error) else "N/D",
+            help_text="Desviación del portafolio frente al benchmark.",
+            subtexto="Cuantifica riesgo activo relativo.",
+        )
+
+    with b4:
+        tarjeta_kpi(
+            "Information Ratio",
+            f"{information_ratio:.4f}" if pd.notna(information_ratio) else "N/D",
+            delta_label(
+                information_ratio,
+                "Retorno activo eficiente",
+                "Retorno activo débil",
+                "Lectura neutral",
+            ),
+            help_text="Retorno activo por unidad de tracking error.",
+            subtexto="Mide eficiencia del desempeño relativo.",
+        )
 
     plot_card_footer(
-        "Estas métricas no reemplazan el juicio de inversión, pero sí justifican la decisión integrada que emite el panel."
+        interpret_relative_performance(ret_port, ret_bench, alpha_jensen, tracking_error)
     )
 
+    seccion("Comparación Visual")
+
+    if cum_port is not None and cum_bench is not None:
+        plot_card_header(
+            "Portafolio vs benchmark",
+            "El gráfico base 100 permite comparar el desempeño acumulado del portafolio frente al benchmark dentro del mismo horizonte del motor.",
+            modo=modo,
+            caption="Sirve para validar si la postura final también es consistente con la lectura relativa de desempeño.",
+        )
+
+        toolbar_label("Opciones de visualización")
+        g1, g2 = st.columns(2)
+        with g1:
+            clean_chart = st.checkbox("Vista limpia", value=False, key="decision_clean_chart")
+        with g2:
+            show_interpretation_box = st.checkbox("Mostrar guía de lectura", value=True, key="decision_show_chart_guide")
+
+        fig_benchmark = plot_benchmark_base100(cum_port, cum_bench)
+        fig_benchmark = style_plot(fig_benchmark, modo)
+        fig_benchmark.update_layout(
+            title=dict(
+                text="Portafolio Vs Benchmark (Base 100)",
+                x=0.03,
+                xanchor="left",
+                y=0.97,
+                yanchor="top",
+                font=dict(size=16, color="#0F172A"),
+            ),
+            margin=dict(l=20, r=20, t=70, b=20),
+        )
+
+        if clean_chart:
+            try:
+                fig_benchmark.update_layout(showlegend=False)
+            except Exception:
+                pass
+
+        st.plotly_chart(fig_benchmark, use_container_width=True)
+
+        if show_interpretation_box:
+            if modo == "General":
+                plot_card_footer(
+                    "Si la línea del portafolio termina por encima del benchmark, hubo mejor desempeño acumulado. Si ambas series se mueven de forma muy parecida, la cartera siguió de cerca al índice. Caídas profundas reflejan episodios de mayor presión de riesgo."
+                )
+            else:
+                plot_card_footer(
+                    "La separación entre curvas refleja desempeño relativo acumulado. La amplitud de las caídas ayuda a identificar drawdowns y sensibilidad del portafolio frente a choques de mercado."
+                )
+    else:
+        nota("No fue posible construir una comparación visual robusta frente al benchmark para este periodo.")
+
+    seccion("Lectura Macro Complementaria")
+    plot_card_footer(interpret_macro_context(rf_pct, inflation_yoy, usdcop_market, cop_per_usd))
 
 # ==============================
 # TAB 3
 # ==============================
 with tab3:
-    seccion("Detalle Técnico Del Score")
+    seccion("Tablas Del Motor")
 
-    detalle_df = pd.DataFrame(
-        {
-            "Componente": ["Riesgo", "Técnica", "Benchmark", "Score ponderado total"],
-            "Lectura": [
-                risk_view["nivel"],
-                signal_summary["lectura"],
-                bench_view["nivel"],
-                f"{decision['score_total']:.3f}",
-            ],
-            "Score base": [
-                risk_view["score"],
-                signal_summary["score"],
-                bench_view["score"],
-                "",
-            ],
-            "Peso aplicado": [
-                f"{profile_cfg['decision_weights']['riesgo']:.0%}",
-                f"{profile_cfg['decision_weights']['tecnica']:.0%}",
-                f"{profile_cfg['decision_weights']['benchmark']:.0%}",
-                "",
-            ],
-        }
-    )
-    st.dataframe(detalle_df, use_container_width=True, hide_index=True)
+    if mostrar_tablas:
+        st.markdown("#### Pesos del portafolio")
+        st.dataframe(weights_df, use_container_width=True, hide_index=True)
 
-    seccion("Detalle De Señales Por Grupo")
+        st.markdown("#### Scorecard del motor")
+        st.dataframe(scorecard_df, use_container_width=True, hide_index=True)
 
-    c1, c2, c3 = st.columns(3)
+        st.markdown("#### Métricas del portafolio")
+        st.dataframe(metrics_df, use_container_width=True, hide_index=True)
+    else:
+        with st.expander("Ver tablas principales del motor"):
+            st.markdown("#### Pesos del portafolio")
+            st.dataframe(weights_df, use_container_width=True, hide_index=True)
 
-    with c1:
-        st.markdown(
-            """
-            <div class="decision-list-card">
-                <div class="decision-list-title">Favorables</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        _render_chip_list(signal_summary["favorables_tickers"], "No hay activos favorables.")
+            st.markdown("#### Scorecard del motor")
+            st.dataframe(scorecard_df, use_container_width=True, hide_index=True)
 
-    with c2:
-        st.markdown(
-            """
-            <div class="decision-list-card">
-                <div class="decision-list-title">Neutrales</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        _render_chip_list(signal_summary["neutrales_tickers"], "No hay activos neutrales.", soft=True)
+            st.markdown("#### Métricas del portafolio")
+            st.dataframe(metrics_df, use_container_width=True, hide_index=True)
 
-    with c3:
-        st.markdown(
-            """
-            <div class="decision-list-card">
-                <div class="decision-list-title">Desfavorables</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        _render_chip_list(signal_summary["desfavorables_tickers"], "No hay activos desfavorables.", soft=True)
-
-    if mostrar_detalle:
-        seccion("Tablas Complementarias")
-
-        c1, c2 = st.columns(2)
-
-        with c1:
-            with st.expander("Ver tabla de riesgo extremo", expanded=False):
-                st.dataframe(risk_table, use_container_width=True, hide_index=True)
-
-        with c2:
-            with st.expander("Ver comparación frente al benchmark", expanded=False):
-                if not summary_df.empty:
-                    st.dataframe(summary_df, use_container_width=True, hide_index=True)
-                else:
-                    st.info("No fue posible construir la tabla comparativa del benchmark.")
-
-        with st.expander("Ver métricas adicionales del benchmark", expanded=False):
-            if not extras_df.empty:
-                st.dataframe(extras_df, use_container_width=True, hide_index=True)
-            else:
-                st.info("No hay métricas adicionales disponibles.")
-
-        with st.expander("Ver diagnósticos GARCH", expanded=False):
-            if "diagnostics" in garch_results and not garch_results["diagnostics"].empty:
-                st.dataframe(garch_results["diagnostics"], use_container_width=True, hide_index=True)
-            else:
-                st.info("No hay diagnósticos GARCH disponibles para la serie analizada.")
-
-    seccion("Lectura Final")
+    seccion("Interpretación Final")
 
     if modo == "General":
         nota(
-            "El panel no toma la decisión con base en una sola métrica. Combina riesgo, lectura técnica y benchmark, y ahora además incorpora el perfil del inversor y la construcción del portafolio."
+            f"La postura final del panel es **{final_decision['stance']}**. El riesgo objetivo del portafolio se clasifica como **{objective_risk['risk_label']}**, y esa medición depende de la construcción seleccionada, no de un filtro de perfil."
+        )
+        nota(
+            f"La construcción seleccionada fue **{construction_objective_label}**. El motor concluye: {final_decision['explanation']}"
         )
     else:
         nota(
-            "La metodología implementa una regla de agregación ponderada entre tres dimensiones relevantes del portafolio. Su objetivo no es maximizar complejidad, sino producir una salida integrada, ajustable y justificable."
+            "Desde el punto de vista metodológico, el módulo 09 ya no mezcla preferencia del usuario con construcción de pesos. El portafolio se construye primero y luego el motor aplica una regla base estable de decisión."
         )
+        nota(
+            f"En esta corrida, la construcción elegida fue **{construction_objective_label}**, el riesgo objetivo resultante fue **{objective_risk['risk_label']}** y el puntaje base fue **{final_decision['base_score']:.1f}**, produciendo la postura final **{final_decision['stance']}**."
+        )
+
+    if mostrar_diagnostico:
+        seccion("Diagnóstico Técnico Adicional")
+
+        with st.expander("Ver señales por ticker", expanded=False):
+            if isinstance(signal_table, pd.DataFrame) and not signal_table.empty:
+                st.dataframe(signal_table, use_container_width=True, hide_index=True)
+            else:
+                st.info("No hay tabla detallada de señales disponible.")
+
+        with st.expander("Ver benchmark detallado", expanded=False):
+            if isinstance(benchmark_detail_df, pd.DataFrame) and not benchmark_detail_df.empty:
+                st.dataframe(benchmark_detail_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No hay tabla principal de benchmark disponible.")
+
+            if isinstance(benchmark_extras_df, pd.DataFrame) and not benchmark_extras_df.empty:
+                st.dataframe(benchmark_extras_df, use_container_width=True, hide_index=True)
+
+        with st.expander("Ver diagnósticos GARCH", expanded=False):
+            diagnostics_df = garch_results.get("diagnostics", pd.DataFrame())
+            comparison_df = garch_results.get("comparison", pd.DataFrame())
+            summary_text = garch_results.get("summary_text", "")
+
+            if isinstance(diagnostics_df, pd.DataFrame) and not diagnostics_df.empty:
+                st.dataframe(diagnostics_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No hay diagnósticos GARCH disponibles para la serie analizada.")
+
+            if isinstance(comparison_df, pd.DataFrame) and not comparison_df.empty:
+                st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+
+            if summary_text:
+                st.caption(summary_text)
+
+    if engine_result.warnings:
+        with st.expander("Ver advertencias del motor", expanded=False):
+            for warning in engine_result.warnings:
+                st.warning(warning)
